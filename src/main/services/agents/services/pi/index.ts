@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { accessSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
@@ -29,14 +30,23 @@ class PiStream extends EventEmitter implements AgentStream {
 
 function resolvePiExecutable(): string {
   try {
-    // Resolve the main entry to find the package directory
-    const mainPath = require_.resolve('@earendil-works/pi-coding-agent')
-    const pkgDir = path.resolve(mainPath, '..', '..')
-    let binPath = path.join(pkgDir, 'dist', 'cli.js')
-    if (app.isPackaged) {
-      binPath = binPath.replace(/\.asar([\\/])/, '.asar.unpacked$1')
+    // Pi package is ESM-only (no "default"/"require" export condition),
+    // so require_.resolve() won't find it. Walk node_modules manually.
+    const searchPaths = require_.resolve.paths('@earendil-works/pi-coding-agent') || []
+    for (const dir of searchPaths) {
+      const candidate = path.join(dir, '@earendil-works', 'pi-coding-agent', 'dist', 'cli.js')
+      try {
+        accessSync(candidate)
+        let binPath = candidate
+        if (app.isPackaged) {
+          binPath = binPath.replace(/\.asar([\\/])/, '.asar.unpacked$1')
+        }
+        return binPath
+      } catch {
+        continue
+      }
     }
-    return binPath
+    return 'pi'
   } catch {
     return 'pi'
   }
