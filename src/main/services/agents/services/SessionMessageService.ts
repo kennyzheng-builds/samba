@@ -11,7 +11,9 @@ import { and, desc, eq, not } from 'drizzle-orm'
 import { BaseService } from '../BaseService'
 import { sessionMessagesTable } from '../database/schema'
 import type { AgentStreamEvent } from '../interfaces/AgentStreamInterface'
+import type { AgentServiceInterface } from '../interfaces/AgentStreamInterface'
 import ClaudeCodeService from './claudecode'
+import PiService from './pi'
 
 const logger = loggerService.withContext('SessionMessageService')
 
@@ -96,6 +98,18 @@ class TextStreamAccumulator {
 export class SessionMessageService extends BaseService {
   private static instance: SessionMessageService | null = null
   private cc: ClaudeCodeService = new ClaudeCodeService()
+  private pi: PiService = new PiService()
+
+  private getServiceForType(agentType: string): AgentServiceInterface {
+    switch (agentType) {
+      case 'claude-code':
+        return this.cc
+      case 'pi':
+        return this.pi
+      default:
+        throw new Error(`Unsupported agent type: ${agentType}`)
+    }
+  }
 
   static getInstance(): SessionMessageService {
     if (!SessionMessageService.instance) {
@@ -164,13 +178,8 @@ export class SessionMessageService extends BaseService {
     const agentSessionId = await this.getLastAgentSessionId(session.id)
     logger.debug('Session Message stream message data:', { message: req, session_id: agentSessionId })
 
-    if (session.agent_type !== 'claude-code') {
-      // TODO: Implement support for other agent types
-      logger.error('Unsupported agent type for streaming:', { agent_type: session.agent_type })
-      throw new Error('Unsupported agent type for streaming')
-    }
-
-    const claudeStream = await this.cc.invoke(req.content, session, abortController, agentSessionId, {
+    const service = this.getServiceForType(session.agent_type)
+    const agentStream = await service.invoke(req.content, session, abortController, agentSessionId, {
       effort: req.effort,
       thinking: req.thinking
     })
@@ -195,12 +204,12 @@ export class SessionMessageService extends BaseService {
     const cleanup = () => {
       if (finished) return
       finished = true
-      claudeStream.removeAllListeners()
+      agentStream.removeAllListeners()
     }
 
     const stream = new ReadableStream<TextStreamPart<Record<string, any>>>({
       start: (controller) => {
-        claudeStream.on('data', async (event: AgentStreamEvent) => {
+        agentStream.on('data', async (event: AgentStreamEvent) => {
           if (finished) return
           try {
             switch (event.type) {

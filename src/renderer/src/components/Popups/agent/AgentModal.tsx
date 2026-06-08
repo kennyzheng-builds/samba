@@ -11,13 +11,14 @@ import SelectAgentBaseModelButton from '@renderer/pages/agents/components/Select
 import type {
   AddAgentForm,
   AgentEntity,
+  AgentType,
   ApiModel,
   BaseAgentForm,
   PermissionMode,
   Tool,
   UpdateAgentForm
 } from '@renderer/types'
-import { AgentConfigurationSchema, isAgentType } from '@renderer/types'
+import { AgentConfigurationSchema, AgentTypeSchema, isAgentType } from '@renderer/types'
 import { parseKeyValueString, serializeKeyValueString } from '@renderer/utils/env'
 import { getAnthropicSupportedProviders } from '@renderer/utils/provider'
 import type { GitBashPathInfo } from '@shared/config/constant'
@@ -147,6 +148,18 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
       }
     })
   }, [])
+
+  const onRuntimeChange = useCallback((value: AgentType) => {
+    setForm((prev) => ({
+      ...prev,
+      type: value
+    }))
+  }, [])
+
+  const runtimeOptions = AgentTypeSchema.options.map((value) => ({
+    value,
+    label: value === 'claude-code' ? 'Claude Code' : value === 'pi' ? 'Pi Agent' : value
+  }))
 
   const onNameChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setForm((prev) => ({
@@ -355,6 +368,21 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
         footer={null}>
         <StyledForm onSubmit={onSubmit}>
           <FormContent>
+            {!isEditing(agent) && (
+              <FormItem>
+                <Label>
+                  Runtime <RequiredMark>*</RequiredMark>
+                </Label>
+                <Select value={form.type} onChange={onRuntimeChange} style={{ width: '100%' }}>
+                  {runtimeOptions.map((opt) => (
+                    <Select.Option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </FormItem>
+            )}
+
             <FormRow>
               <FormItem style={{ flex: 1 }}>
                 <Label>
@@ -371,7 +399,7 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
                 </Label>
                 <AnthropicProviderListPopover
                   useWindowNavigate
-                  filterProviders={getAnthropicSupportedProviders}
+                  filterProviders={form.type === 'pi' ? undefined : getAnthropicSupportedProviders}
                   onProviderClick={() => {
                     setOpen(false)
                     resolve(undefined)
