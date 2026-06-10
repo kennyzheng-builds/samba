@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { accessSync } from 'node:fs'
+import { accessSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -56,6 +57,7 @@ function mapProviderForPi(providerType: string): string {
   const mapping: Record<string, string> = {
     anthropic: 'anthropic',
     openai: 'openai',
+    deepseek: 'deepseek',
     'google-genai': 'google',
     ollama: 'ollama',
     groq: 'groq',
@@ -100,6 +102,15 @@ class PiService implements AgentServiceInterface {
     const modelId = getRealProviderModel(session.model)
     const apiKey = modelInfo.provider!.apiKey || modelInfo.provider!.id
     const apiHost = modelInfo.provider!.apiHost || modelInfo.provider!.anthropicApiHost || ''
+
+    logger.info('Pi provider config', {
+      providerType: modelInfo.provider!.type,
+      piProvider,
+      modelId,
+      apiHost: apiHost ? apiHost.replace(/\/\/[^/]+/, '//***') : '(empty)',
+      hasApiKey: !!apiKey && apiKey.length > 0,
+      apiKeyPrefix: apiKey ? apiKey.slice(0, 8) + '...' : '(none)'
+    })
 
     setImmediate(() => {
       this.startRpcSession(aiStream, {
@@ -157,6 +168,8 @@ class PiService implements AgentServiceInterface {
       if (opts.apiHost) env.OPENAI_BASE_URL = opts.apiHost
     } else if (opts.provider === 'google') {
       env.GOOGLE_API_KEY = opts.apiKey
+    } else if (opts.provider === 'deepseek') {
+      env.DEEPSEEK_API_KEY = opts.apiKey
     } else if (opts.provider === 'groq') {
       env.GROQ_API_KEY = opts.apiKey
     }
@@ -169,7 +182,42 @@ class PiService implements AgentServiceInterface {
       }
     }
 
-    const args = [piExe, '--mode', 'rpc', '--provider', opts.provider, '--model', opts.modelId, '--no-session']
+    // Pi ignores OPENAI_BASE_URL — it uses its own models.json for provider baseUrl.
+    // Write a temp config when apiHost is set to redirect Pi to the custom endpoint.
+    // Also force openai-completions API for custom endpoints (most don't support Responses API).
+    if (opts.apiHost) {
+      const piConfigDir = path.join(tmpdir(), `pi-agent-${Date.now()}`)
+      mkdirSync(piConfigDir, { recursive: true })
+      const modelsConfig = {
+        providers: {
+          [opts.provider]: {
+            baseUrl: opts.apiHost,
+            models: [
+              {
+                id: opts.modelId,
+                api: 'openai-completions'
+              }
+            ]
+          }
+        }
+      }
+      writeFileSync(path.join(piConfigDir, 'models.json'), JSON.stringify(modelsConfig))
+      env.PI_CODING_AGENT_DIR = piConfigDir
+      logger.info('Pi custom config', { piConfigDir, baseUrl: opts.apiHost, api: 'openai-completions' })
+    }
+
+    const args = [
+      piExe,
+      '--mode',
+      'rpc',
+      '--provider',
+      opts.provider,
+      '--model',
+      opts.modelId,
+      '--api-key',
+      opts.apiKey,
+      '--no-session'
+    ]
 
     if (opts.instructions) {
       args.push('--system-prompt', opts.instructions)
@@ -256,6 +304,7 @@ class PiService implements AgentServiceInterface {
     })
 
     child.on('exit', (code, signal) => {
+      logger.info('Pi process exited', { code, signal, hasCompleted })
       if (hasCompleted) return
       cleanup()
       if (code !== 0 && signal !== 'SIGTERM') {
@@ -276,7 +325,7 @@ class PiService implements AgentServiceInterface {
     const promptCmd = JSON.stringify({
       id: '1',
       type: 'prompt',
-      content: opts.prompt
+      message: opts.prompt
     })
 
     logger.info('Sending prompt to Pi RPC', { promptLength: opts.prompt.length })

@@ -156,9 +156,15 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
     }))
   }, [])
 
+  const runtimeLabels: Record<string, string> = {
+    'claude-code': 'Claude Code',
+    pi: 'Pi Agent',
+    'ai-sdk': 'AI SDK'
+  }
+
   const runtimeOptions = AgentTypeSchema.options.map((value) => ({
     value,
-    label: value === 'claude-code' ? 'Claude Code' : value === 'pi' ? 'Pi Agent' : value
+    label: runtimeLabels[value] || value
   }))
 
   const onNameChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -297,6 +303,7 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
 
         const updatePayload = {
           id: agent.id,
+          type: form.type,
           name: form.name,
           description: form.description,
           instructions: form.instructions,
@@ -368,20 +375,18 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
         footer={null}>
         <StyledForm onSubmit={onSubmit}>
           <FormContent>
-            {!isEditing(agent) && (
-              <FormItem>
-                <Label>
-                  Runtime <RequiredMark>*</RequiredMark>
-                </Label>
-                <Select value={form.type} onChange={onRuntimeChange} style={{ width: '100%' }}>
-                  {runtimeOptions.map((opt) => (
-                    <Select.Option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </Select.Option>
-                  ))}
-                </Select>
-              </FormItem>
-            )}
+            <FormItem>
+              <Label>
+                Runtime <RequiredMark>*</RequiredMark>
+              </Label>
+              <Select value={form.type} onChange={onRuntimeChange} style={{ width: '100%' }}>
+                {runtimeOptions.map((opt) => (
+                  <Select.Option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </Select.Option>
+                ))}
+              </Select>
+            </FormItem>
 
             <FormRow>
               <FormItem style={{ flex: 1 }}>
@@ -399,7 +404,7 @@ const PopupContainer: React.FC<Props> = ({ agent, afterSubmit, resolve }) => {
                 </Label>
                 <AnthropicProviderListPopover
                   useWindowNavigate
-                  filterProviders={form.type === 'pi' ? undefined : getAnthropicSupportedProviders}
+                  filterProviders={form.type === 'claude-code' ? getAnthropicSupportedProviders : undefined}
                   onProviderClick={() => {
                     setOpen(false)
                     resolve(undefined)

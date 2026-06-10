@@ -12,6 +12,7 @@ import { BaseService } from '../BaseService'
 import { sessionMessagesTable } from '../database/schema'
 import type { AgentStreamEvent } from '../interfaces/AgentStreamInterface'
 import type { AgentServiceInterface } from '../interfaces/AgentStreamInterface'
+import AiSdkService from './aisdk'
 import ClaudeCodeService from './claudecode'
 import PiService from './pi'
 
@@ -99,6 +100,7 @@ export class SessionMessageService extends BaseService {
   private static instance: SessionMessageService | null = null
   private cc: ClaudeCodeService = new ClaudeCodeService()
   private pi: PiService = new PiService()
+  private aisdk: AiSdkService = new AiSdkService()
 
   private getServiceForType(agentType: string): AgentServiceInterface {
     switch (agentType) {
@@ -106,6 +108,8 @@ export class SessionMessageService extends BaseService {
         return this.cc
       case 'pi':
         return this.pi
+      case 'ai-sdk':
+        return this.aisdk
       default:
         throw new Error(`Unsupported agent type: ${agentType}`)
     }

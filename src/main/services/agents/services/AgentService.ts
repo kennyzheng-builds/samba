@@ -170,8 +170,10 @@ export class AgentService extends BaseService {
       }
     }
 
+    const effectiveType = (updates as { type?: string }).type ?? existing.type
+
     if (Object.keys(modelUpdates).length > 0) {
-      await this.validateAgentModels(existing.type, modelUpdates)
+      await this.validateAgentModels(effectiveType, modelUpdates)
     }
 
     const serializedUpdates = this.serializeJsonFields(updates)
@@ -179,6 +181,11 @@ export class AgentService extends BaseService {
     const updateData: Partial<AgentRow> = {
       updated_at: now
     }
+
+    if ((updates as { type?: string }).type) {
+      updateData.type = (updates as { type?: string }).type
+    }
+
     const replaceableFields = Object.keys(AgentBaseSchema.shape) as (keyof AgentRow)[]
     const shouldReplace = options.replace ?? false
 

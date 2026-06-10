@@ -102,6 +102,23 @@ export class PiStreamState {
         break
       }
 
+      case 'message_start':
+        break
+
+      case 'message_end': {
+        const msg = event.message
+        if (msg?.role === 'assistant' && msg?.errorMessage) {
+          parts.push({ type: 'text-start', id: generateId() } as AgentStreamPart)
+          parts.push({
+            type: 'text-delta',
+            id: generateId(),
+            text: `Error: ${msg.errorMessage}`
+          } as AgentStreamPart)
+          parts.push({ type: 'text-end', id: generateId(), providerMetadata: {} } as AgentStreamPart)
+        }
+        break
+      }
+
       default:
         logger.debug('Unhandled Pi RPC event type', { type })
         break
@@ -130,11 +147,12 @@ export class PiStreamState {
           this.activeTextBlock = true
           parts.push({ type: 'text-start', id: generateId() } as AgentStreamPart)
         }
-        if (delta.text) {
+        const textContent = delta.delta ?? delta.text
+        if (textContent) {
           parts.push({
             type: 'text-delta',
             id: generateId(),
-            text: delta.text
+            text: textContent
           } as AgentStreamPart)
         }
         break
@@ -165,11 +183,12 @@ export class PiStreamState {
           this.activeThinkingBlock = true
           parts.push({ type: 'reasoning-start', id: generateId() } as AgentStreamPart)
         }
-        if (delta.text) {
+        const thinkingContent = delta.delta ?? delta.text
+        if (thinkingContent) {
           parts.push({
             type: 'reasoning-delta',
             id: generateId(),
-            text: delta.text
+            text: thinkingContent
           } as AgentStreamPart)
         }
         break
@@ -200,12 +219,13 @@ export class PiStreamState {
         const toolCall = delta.toolCall || {}
         const toolCallId = toolCall.id || ''
         const pending = this.pendingToolCalls.get(toolCallId)
-        if (pending && delta.inputDelta) {
-          pending.input += delta.inputDelta
+        const inputDelta = delta.inputDelta ?? delta.delta
+        if (pending && inputDelta) {
+          pending.input += inputDelta
           parts.push({
             type: 'tool-input-delta',
             id: toolCallId,
-            delta: delta.inputDelta
+            delta: inputDelta
           } as AgentStreamPart)
         }
         break
