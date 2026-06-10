@@ -740,7 +740,7 @@ const fetchAndProcessAgentResponseImpl = async (
     const adapter = new AiSdkToChunkAdapter(
       streamProcessorCallbacks,
       [],
-      false,
+      true,
       false,
       (sessionId) => {
         void persistAgentSessionId(sessionId)
