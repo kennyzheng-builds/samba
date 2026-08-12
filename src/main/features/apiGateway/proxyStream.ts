@@ -32,6 +32,7 @@ import { buildStreamErrorFrame } from './errors'
 import { googleReasoningCache, openRouterReasoningCache } from './reasoningCache'
 import { appendInternalAgentContinuation } from './utils/agentContinuation'
 import { normalizeAnthropicToolHistory } from './utils/anthropicToolHistory'
+import { stripClaudeCodeRuntimeIdentity } from './utils/claudeCodeRuntimeIdentity'
 import { resolveGatewayModelAddress } from './utils/models'
 import { applyAgentPromptCacheKey } from './utils/promptCacheKey'
 
@@ -189,6 +190,11 @@ export async function processMessage(config: MessageConfig): Promise<Response> {
         duplicateToolUseCount: normalization.duplicateToolUseCount,
         duplicateToolResultCount: normalization.duplicateToolResultCount
       })
+    }
+
+    const system = stripClaudeCodeRuntimeIdentity(anthropicParams.system)
+    if (system !== anthropicParams.system) {
+      effectiveParams = { ...(effectiveParams as MessageCreateParams), system }
     }
   }
 

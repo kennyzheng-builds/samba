@@ -564,6 +564,108 @@ describe('processMessage (internal Agent continuation normalization)', () => {
   })
 })
 
+/**
+ * The Claude Code CLI prepends `You are Claude Code, …` to the system prompt of every
+ * request, with no SDK option to suppress it, so a DeepSeek/Doubao/Gemini Agent session
+ * used to be told it was Claude and answered accordingly.
+ */
+describe('processMessage (internal Agent runtime identity)', () => {
+  const CLI_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."
+  const PRESET = 'You are an interactive agent that helps users with software engineering tasks.'
+
+  function withSystem(params: MessageCreateParams, system: MessageCreateParams['system']): MessageCreateParams {
+    return { ...params, system }
+  }
+
+  it('strips the CLI identity claim before the request reaches a non-Anthropic provider', async () => {
+    useGatewayModel('deepseek-chat', ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS, 'deepseek')
+    mockIsInternalAgentRequest.mockReturnValue(true)
+    const params = withSystem(
+      createAnthropicParams('deepseek-chat', [{ role: 'user', content: '你是谁？' }], true, 'deepseek'),
+      [
+        { type: 'text', text: CLI_IDENTITY },
+        { type: 'text', text: PRESET }
+      ]
+    )
+    const snapshot = structuredClone(params)
+
+    await processAndCaptureStreamMessages(params)
+
+    expect(mockToUIMessages.mock.calls[0][0].system).toEqual([{ type: 'text', text: PRESET }])
+    expect(mockExtractProviderOptions.mock.calls[0][2]).toBe(mockToUIMessages.mock.calls[0][0])
+    expect(params).toEqual(snapshot)
+  })
+
+  it('strips the identity claim the CLI uses for a fully custom system prompt', async () => {
+    useGatewayModel('gemini-3-pro', ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS, 'gemini')
+    mockIsInternalAgentRequest.mockReturnValue(true)
+    const params = withSystem(
+      createAnthropicParams('gemini-3-pro', [{ role: 'user', content: 'who are you' }], true, 'gemini'),
+      [
+        { type: 'text', text: "You are a Claude agent, built on Anthropic's Claude Agent SDK." },
+        { type: 'text', text: PRESET }
+      ]
+    )
+
+    await processAndCaptureStreamMessages(params)
+
+    expect(mockToUIMessages.mock.calls[0][0].system).toEqual([{ type: 'text', text: PRESET }])
+  })
+
+  it('strips the identity claim on top of a tool-history repair', async () => {
+    useGatewayModel('deepseek-chat', ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS, 'deepseek')
+    mockIsInternalAgentRequest.mockReturnValue(true)
+    const call = { type: 'tool_use' as const, id: 'c1', name: 'read_file', input: {} }
+    const params = withSystem(
+      createAnthropicParams(
+        'deepseek-chat',
+        [
+          { role: 'user', content: 'Read it' },
+          { role: 'assistant', content: [call, structuredClone(call)] }
+        ],
+        true,
+        'deepseek'
+      ),
+      [
+        { type: 'text', text: CLI_IDENTITY },
+        { type: 'text', text: PRESET }
+      ]
+    )
+
+    await processAndCaptureStreamMessages(params)
+
+    const effectiveParams = mockToUIMessages.mock.calls[0][0]
+    expect(effectiveParams.system).toEqual([{ type: 'text', text: PRESET }])
+    expect(effectiveParams.messages[1].content).toEqual([call])
+  })
+
+  it('leaves an external gateway request unchanged', async () => {
+    useGatewayModel('claude-opus-5')
+    mockIsInternalAgentRequest.mockReturnValue(false)
+    const params = withSystem(createAnthropicParams('claude-opus-5', [{ role: 'user', content: 'who are you' }]), [
+      { type: 'text', text: CLI_IDENTITY },
+      { type: 'text', text: PRESET }
+    ])
+
+    await processAndCaptureStreamMessages(params)
+
+    expect(mockToUIMessages.mock.calls[0][0]).toBe(params)
+  })
+
+  it('leaves a system prompt without an identity claim untouched', async () => {
+    useGatewayModel('deepseek-chat', ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS, 'deepseek')
+    mockIsInternalAgentRequest.mockReturnValue(true)
+    const params = withSystem(
+      createAnthropicParams('deepseek-chat', [{ role: 'user', content: 'hi' }], true, 'deepseek'),
+      [{ type: 'text', text: PRESET }]
+    )
+
+    await processAndCaptureStreamMessages(params)
+
+    expect(mockToUIMessages.mock.calls[0][0]).toBe(params)
+  })
+})
+
 describe('processMessage (streaming)', () => {
   it('passes validated internal agent-session correlation to provider-call usage capture', async () => {
     const usageContext = {
