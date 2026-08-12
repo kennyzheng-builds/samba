@@ -127,10 +127,11 @@ export type AgentRuntimeEvent =
   /** Steers stashed via `redirect()` that the turn ended before injecting — the host queues them
    *  as the next turn (the `steer_undelivered` fallback). */
   | { type: 'steer-undelivered'; inputs: AgentRuntimeUserInput[] }
-  /** A steer was injected mid-turn (PreToolUse hook) and the model is about to emit its post-steer
-   *  assistant message. Marks where the host should roll the assistant message: finalise the
-   *  pre-steer parts as one row (A1a) and stream the continuation into a fresh row (A2), so the
-   *  steer user message sorts between them instead of dangling after the whole turn. */
+  /** The model is about to emit an assistant message that must start a fresh row. Marks where the
+   *  host should roll the assistant message: finalise the parts so far as one row (A1a) and stream
+   *  the continuation into a fresh row (A2), so whatever was persisted in between sorts between them
+   *  instead of dangling after the whole turn. `inputs` carries the steers a mid-turn PreToolUse
+   *  injection rolled for, and is empty when the host asked for the roll via `requestAssistantRoll`. */
   | { type: 'steer-boundary'; inputs: AgentRuntimeUserInput[] }
   | { type: 'compaction-start'; trigger?: AgentSessionCompactionTrigger }
   | { type: 'compaction-complete'; anchor?: AgentSessionCompactionAnchorData }
@@ -188,6 +189,14 @@ export interface AgentRuntimeConnection {
    * host always queues.
    */
   redirect?(input: AgentRuntimeUserInput): boolean
+  /**
+   * Arm a `steer-boundary` for the next assistant message even though no steer was injected. The
+   * host calls this after persisting an independent row mid-turn (a background agent's interaction):
+   * the live row keeps its turn-start `created_at`, so everything the turn produces next would sort
+   * above that row. Rolling stops it accumulating. Omitted ⇒ no native roll ⇒ the host leaves the
+   * live row alone.
+   */
+  requestAssistantRoll?(): void
   /**
    * Re-derive the session's desired config and reconcile the running connection against it.
    * Live-appliable tool-policy facts are patched in place before the rebuild verdict, except for

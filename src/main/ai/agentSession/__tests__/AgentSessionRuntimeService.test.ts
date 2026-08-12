@@ -2187,6 +2187,53 @@ describe('AgentSessionRuntimeService', () => {
       )
     })
 
+    it('rolls the live assistant row when a background interaction is persisted mid-turn', () => {
+      const service = new AgentSessionRuntimeService()
+      service.beginTurn(baseTurnInput)
+      const entry = getEntry(service)
+      const requestAssistantRoll = vi.fn()
+      entry.connection = { close: vi.fn(), send: vi.fn(), events: [], requestAssistantRoll }
+      entry.runtimeState.execution = { ...entry.runtimeState.execution, stream: 'open', admission: 'admitted' }
+
+      ;(service as any).handleRuntimeEvent(entry, {
+        type: 'tool-approval-request',
+        request: {
+          approvalId: 'approval-bg',
+          toolCallId: 'tool-call-bg',
+          toolName: 'AskUserQuestion',
+          input: { questions: [{ question: 'Choose a database' }] },
+          presentation: 'message'
+        }
+      })
+
+      // Without the roll the live row keeps its turn-start `created_at` and everything it streams
+      // next sorts above this freshly stamped interaction row.
+      expect(requestAssistantRoll).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not ask for a roll when the interaction outlived its turn', () => {
+      const service = new AgentSessionRuntimeService()
+      service.beginTurn(baseTurnInput)
+      const entry = getEntry(service)
+      const requestAssistantRoll = vi.fn()
+      entry.connection = { close: vi.fn(), send: vi.fn(), events: [], requestAssistantRoll }
+      service.markTurnTerminal('session-1', 'success')
+
+      ;(service as any).handleRuntimeEvent(entry, {
+        type: 'tool-approval-request',
+        request: {
+          approvalId: 'approval-bg',
+          toolCallId: 'tool-call-bg',
+          toolName: 'AskUserQuestion',
+          input: { questions: [{ question: 'Choose a database' }] },
+          presentation: 'message'
+        }
+      })
+
+      // No live row to roll — arming one would strand the boundary and log an invalid transition.
+      expect(requestAssistantRoll).not.toHaveBeenCalled()
+    })
+
     it('keeps an in-turn approval on the live assistant stream', () => {
       const service = new AgentSessionRuntimeService()
       service.beginTurn(baseTurnInput)
@@ -3957,6 +4004,43 @@ describe('AgentSessionRuntimeService', () => {
           steer: true
         }
       ])
+      void service.closeSession('session-1')
+      await reader.cancel().catch(() => undefined)
+    })
+
+    it('rolls the open turn when a follow-up is queued instead of steered, but not when it is steered', async () => {
+      const events = createAsyncQueue<any>()
+      const redirect = vi.fn().mockReturnValue(true)
+      const requestAssistantRoll = vi.fn()
+      const connection = { events: events.iterable, send: vi.fn(), redirect, requestAssistantRoll, close: vi.fn() }
+      runtimeDriverRegistry.register({
+        type: 'test-runtime',
+        capabilities: ['agent-session'],
+        connect: vi.fn().mockResolvedValue(connection),
+        validateSession: vi.fn(),
+        listAvailableTools: vi.fn().mockResolvedValue([])
+      })
+      const service = new AgentSessionRuntimeService()
+      const handle = service.beginTurn({ ...baseTurnInput, userMessage: userMessage('user-1', ['kb-1']) })
+      const stream = service.openTurnStream({
+        sessionId: 'session-1',
+        turnId: handle.turnId,
+        signal: new AbortController().signal
+      })
+      const reader = stream.getReader()
+      await expect(reader.read()).resolves.toMatchObject({ value: { type: 'start' }, done: false })
+      await vi.waitFor(() => expect(connection.send).toHaveBeenCalledOnce())
+
+      // A steer that IS injected arms the boundary itself through `onSteerInjected`.
+      service.enqueueUserMessage('session-1', userMessage('user-2', ['kb-1']))
+      expect(redirect).toHaveBeenCalledOnce()
+      expect(requestAssistantRoll).not.toHaveBeenCalled()
+
+      // A follow-up the driver cannot fold in is queued — but the open turn keeps streaming into a
+      // row stamped before it, so the host must roll that row itself.
+      service.enqueueUserMessage('session-1', userMessage('user-3', ['kb-2']))
+      expect(requestAssistantRoll).toHaveBeenCalledTimes(1)
+
       void service.closeSession('session-1')
       await reader.cancel().catch(() => undefined)
     })

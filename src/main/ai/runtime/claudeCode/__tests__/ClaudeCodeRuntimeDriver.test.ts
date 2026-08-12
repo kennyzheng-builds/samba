@@ -3244,6 +3244,84 @@ describe('ClaudeCodeRuntimeDriver', () => {
     void connection.close()
   })
 
+  it('rolls at the next top-level message_start when the host requests an assistant roll', async () => {
+    const queryQueue = createAsyncQueue<any>()
+    const query = { ...queryQueue.iterable, interrupt: vi.fn(), close: vi.fn() }
+    mocks.createClaudeQuery.mockReturnValue(query)
+    const steerHolder = { pending: [] as unknown[], onInjected: undefined as any, dispose: vi.fn() }
+    mocks.buildRequest.mockResolvedValueOnce({
+      key: 'warm-key',
+      options: { model: 'sonnet' },
+      settings: { steerHolder },
+      sdkModelId: 'sonnet-sdk',
+      initializeTimeoutMs: 100
+    })
+    const connection = await new ClaudeCodeRuntimeDriver().connect({
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      modelId: 'claude-code::sonnet' as any
+    })
+    const events = connection.events[Symbol.asyncIterator]()
+
+    queryQueue.push({ type: 'system', subtype: 'init', session_id: 'resume-init' })
+    await events.next() // resume-token
+    await connection.send({ message: userMessage() })
+    await events.next() // metadata chunk (init replayed on send)
+
+    // No arm yet — the parent turn's own messages keep streaming into the same row.
+    queryQueue.push({ type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: null })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'chunk', chunk: { type: 'text-delta' } } })
+
+    // The host persisted a background agent's interaction row and asks for a roll — no steer inputs.
+    connection.requestAssistantRoll!()
+
+    // The subagent that raised the interaction keeps emitting; a nested message must NOT roll.
+    queryQueue.push({ type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: 'tool-x' })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'chunk', chunk: { type: 'text-delta' } } })
+
+    queryQueue.push({ type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: null })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'steer-boundary', inputs: [] } })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'chunk', chunk: { type: 'text-delta' } } })
+
+    void connection.close()
+  })
+
+  it('rolls once when a steer and a host-requested roll arm the same boundary, keeping the steer inputs', async () => {
+    const queryQueue = createAsyncQueue<any>()
+    const query = { ...queryQueue.iterable, interrupt: vi.fn(), close: vi.fn() }
+    mocks.createClaudeQuery.mockReturnValue(query)
+    const steerHolder = { pending: [] as unknown[], onInjected: undefined as any, dispose: vi.fn() }
+    mocks.buildRequest.mockResolvedValueOnce({
+      key: 'warm-key',
+      options: { model: 'sonnet' },
+      settings: { steerHolder },
+      sdkModelId: 'sonnet-sdk',
+      initializeTimeoutMs: 100
+    })
+    const connection = await new ClaudeCodeRuntimeDriver().connect({
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      modelId: 'claude-code::sonnet' as any
+    })
+    const events = connection.events[Symbol.asyncIterator]()
+
+    await connection.send({ message: userMessage() })
+
+    const steer = { message: userMessage() }
+    steerHolder.onInjected([steer])
+    connection.requestAssistantRoll!()
+
+    queryQueue.push({ type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: null })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'steer-boundary', inputs: [steer] } })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'chunk', chunk: { type: 'text-delta' } } })
+
+    // The single boundary consumed both arms — the next top-level message does not roll again.
+    queryQueue.push({ type: 'stream_event', event: { type: 'message_start' }, parent_tool_use_id: null })
+    await expect(events.next()).resolves.toMatchObject({ value: { type: 'chunk', chunk: { type: 'text-delta' } } })
+
+    void connection.close()
+  })
+
   it('drops the steer-boundary arm when the turn ends before a post-steer message', async () => {
     const queryQueue = createAsyncQueue<any>()
     const query = { ...queryQueue.iterable, interrupt: vi.fn(), close: vi.fn() }

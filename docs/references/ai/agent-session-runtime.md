@@ -100,6 +100,16 @@ between the two assistant rows instead of dangling after the whole turn.
 across a mid-flight compaction) so the continuation carries the renderer
 listeners.
 
+A steer is not the only thing that must sort between two assistant rows.
+A background agent's interaction (`presentation: 'message'`) is persisted
+as its own row **while the parent turn is still streaming**, and the live
+row keeps the `created_at` it was opened with — so without a roll every
+part the turn streams afterwards sorts above an interaction the user has
+already answered. The host therefore calls
+`connection.requestAssistantRoll()` after persisting that row, arming the
+same boundary with no steer inputs. Both arms collapse into one roll, and
+an arm the turn never reaches is dropped at `result` (no empty A2).
+
 ## Starting the next runtime turn
 
 A queued successor may start only after the current execution reaches

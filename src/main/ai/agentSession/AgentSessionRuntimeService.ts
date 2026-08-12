@@ -802,11 +802,13 @@ export class AgentSessionRuntimeService extends BaseService {
         resolveKnowledgeBaseScope(configuredKnowledgeBaseIds, turn.knowledgeBaseIds),
         resolveKnowledgeBaseScope(configuredKnowledgeBaseIds, knowledgeBaseIds)
       )
-    if (
+    const hasOpenLiveTurn =
       entry.runtimeState.execution.kind === 'turn' &&
       entry.runtimeState.execution.stream === 'open' &&
-      turn &&
-      this.isTurnLive(entry, turn) &&
+      turn !== undefined &&
+      this.isTurnLive(entry, turn)
+    if (
+      hasOpenLiveTurn &&
       canRedirectOnCurrentConfig &&
       this.currentConnection(entry)?.redirect?.({
         message,
@@ -817,6 +819,12 @@ export class AgentSessionRuntimeService extends BaseService {
     ) {
       return
     }
+
+    // Queueing does not stop the open turn: its row keeps the `created_at` it was opened with, so
+    // everything it streams from here sorts ABOVE the follow-up row already persisted for this
+    // message. Roll at the next assistant message (an injected steer arms the same boundary itself)
+    // so the follow-up lands between A1a and A2 instead of under a message that outgrew it.
+    if (hasOpenLiveTurn) this.currentConnection(entry)?.requestAssistantRoll?.()
 
     // No redirect-eligible open normal turn (or backend can't steer) → queue as the next turn,
     // wrapped in a steer system-reminder.
@@ -2195,6 +2203,13 @@ export class AgentSessionRuntimeService extends BaseService {
         },
         { publishDataChange: true }
       )
+      // The row above is stamped now, but a live turn's row keeps the `created_at` it was opened
+      // with — so everything that turn streams next sorts ABOVE this interaction, and the message
+      // the user is still watching drifts above the card they just answered. Roll at the next
+      // assistant message (the boundary a steer already uses) so the card lands between A1a and A2.
+      if (entry.runtimeState.execution.kind === 'turn' && entry.runtimeState.execution.stream === 'open') {
+        this.currentConnection(entry)?.requestAssistantRoll?.()
+      }
     } catch (error) {
       logger.error('Failed to persist background tool approval request', {
         sessionId: entry.sessionId,

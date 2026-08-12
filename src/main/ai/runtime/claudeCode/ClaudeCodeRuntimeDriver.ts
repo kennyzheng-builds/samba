@@ -380,9 +380,10 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
   private readonly committedInvocationIds = new Set<string>()
   /** Serializes reconciles per connection so push/pull can't interleave SDK and snapshot writes. */
   private reconcileChain: Promise<unknown> = Promise.resolve()
-  /** Set when the PreToolUse hook injects a steer; the next top-level assistant `message_start`
-   *  emits a `steer-boundary` (rolls A1a + A2) and clears this. */
-  private steerBoundaryPending?: AgentRuntimeUserInput[]
+  /** Set when the PreToolUse hook injects a steer, or when the host requests a roll for an
+   *  independent row it persisted mid-turn (then empty); the next top-level assistant
+   *  `message_start` emits a `steer-boundary` (rolls A1a + A2) and clears this. */
+  private rollBoundaryPending?: AgentRuntimeUserInput[]
 
   readonly events = this.eventQueue
   get usageCapture(): AgentSessionUsageCapture | undefined {
@@ -469,7 +470,7 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
     // connection (not the warm prewarm) so the boundary is observed by this connection's query loop.
     if (this.steerHolder) {
       this.steerHolder.onInjected = (inputs) => {
-        this.steerBoundaryPending = inputs
+        this.rollBoundaryPending = inputs
         // Reserve the host continuation synchronously before the hook returns. A gateway-backed
         // subprocess can issue its next provider request before the later `message_start` reaches
         // this query loop, so the async `steer-boundary` event is too late for request correlation.
@@ -521,6 +522,11 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
     // If the turn ends with no tool call, runQueryLoop emits `steer-undelivered` and the host queues it.
     this.steerHolder.pending.push(input)
     return true
+  }
+
+  requestAssistantRoll(): void {
+    // `??=` so a steer already armed for this boundary keeps its inputs — one boundary rolls both.
+    this.rollBoundaryPending ??= []
   }
 
   async reconcile(input: {
@@ -658,7 +664,7 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
     this.settlePendingInvocations()
     this.sdkInputQueue.close()
     this.abortController.abort('agent-runtime-closed')
-    this.steerBoundaryPending = undefined
+    this.rollBoundaryPending = undefined
     this.teardownSession()
     this.eventQueue.close()
     if (!query) return
@@ -677,19 +683,19 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
   private async runQueryLoop(): Promise<void> {
     try {
       for await (const message of this.query!) {
-        // A steer was injected this turn → the first TOP-LEVEL assistant message after it (the model's
+        // A roll is armed for this turn → the first TOP-LEVEL assistant message after it (the model's
         // post-steer response; subagent/nested messages carry a parent_tool_use_id and are skipped) is
         // where the host rolls A1a + A2. Emit the boundary BEFORE the adapter handles this message so it
         // lands ahead of A2's content chunks in the event stream. (message_start is a no-op in the adapter.)
         if (
-          this.steerBoundaryPending &&
+          this.rollBoundaryPending &&
           message.type === 'stream_event' &&
           message.event.type === 'message_start' &&
           message.parent_tool_use_id == null
         ) {
           this.commitPendingInvocations()
-          this.eventQueue.push({ type: 'steer-boundary', inputs: this.steerBoundaryPending })
-          this.steerBoundaryPending = undefined
+          this.eventQueue.push({ type: 'steer-boundary', inputs: this.rollBoundaryPending })
+          this.rollBoundaryPending = undefined
         }
 
         const messageAssociation = this.adapter!.isTurnActive ? 'current-turn' : 'stateless'
@@ -707,9 +713,9 @@ class ClaudeCodeRuntimeConnection implements AgentRuntimeConnection {
         if (result.type === 'result') {
           this.commitPendingInvocations()
           this.updateResumeToken(result.sessionId)
-          // The steer was injected but no post-steer top-level assistant message followed (rare; the
-          // turn ended right after the gated tool). Drop the arm — no boundary, no empty A2.
-          this.steerBoundaryPending = undefined
+          // The roll was armed but no top-level assistant message followed (rare; the turn ended right
+          // after the gated tool). Drop the arm — no boundary, no empty A2.
+          this.rollBoundaryPending = undefined
           // `readUIMessageStream` only reads token counts from `message-metadata`
           // chunks. The streamAdapter's V3-shaped `finish.usage` is ignored, so
           // we project the SDK BetaUsage onto a UIMessageChunk here — keeping
