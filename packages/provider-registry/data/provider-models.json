@@ -19933,6 +19933,11 @@
       "supportsFastMode": true
     },
     {
+      "endpointTypes": ["openai-image-generation"],
+      "modelId": "gpt-image-2",
+      "providerId": "openai-codex"
+    },
+    {
       "apiModelId": "deepseek-v4-flash",
       "endpointTypes": ["openai-chat-completions"],
       "modelId": "deepseek-v4-flash",

@@ -187,3 +187,28 @@ describe('new-api single-host endpoints', () => {
     expect(provider('new-api').overrides ?? []).toEqual([])
   })
 })
+
+/**
+ * Codex has no listable model API (`modelListSource: 'registry'`), so this catalog IS the model
+ * list users see — anything missing here is unreachable in the app (#18219).
+ */
+describe('openai-codex endpoint matrix', () => {
+  /**
+   * The ChatGPT codex backend serves image generation off its own base URL
+   * (`codex-rs/codex-api/src/endpoint/images.rs` POSTs `images/generations`), on the model its
+   * image-generation tool pins (`codex-rs/ext/image-generation/src/tool.rs`: `IMAGE_MODEL =
+   * "gpt-image-2"`). It is absent from the codex models manifest — which is why refreshing the
+   * model list never surfaced it — so it reaches users only through this override.
+   */
+  it('serves gpt-image-2 on the images endpoint', () => {
+    expect(endpointsOf('openai-codex', 'gpt-image-2')).toEqual(['openai-image-generation'])
+  })
+
+  /** Codex takes the served id verbatim — a gateway-style `openai/…` prefix would 404. */
+  it('sends gpt-image-2 under its catalog id', () => {
+    const entry = provider('openai-codex')
+      .overrides?.map((o) => splitOverrideWireId(o))
+      .find((o) => o.modelId === 'gpt-image-2')
+    expect(entry?.apiModelId ?? entry?.modelId).toBe('gpt-image-2')
+  })
+})

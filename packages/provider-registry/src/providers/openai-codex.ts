@@ -61,6 +61,11 @@ export default defineProvider({
       endpointTypes: ['openai-responses']
     },
     { modelId: 'gpt-5-4-mini', apiModelId: 'gpt-5.4-mini', endpointTypes: ['openai-responses'] },
-    { modelId: 'gpt-5-3-codex-spark', apiModelId: 'gpt-5.3-codex-spark', endpointTypes: ['openai-responses'] }
+    { modelId: 'gpt-5-3-codex-spark', apiModelId: 'gpt-5.3-codex-spark', endpointTypes: ['openai-responses'] },
+    // Image generation is served off the codex base URL's own `images/generations`
+    // (upstream `codex-rs/codex-api/src/endpoint/images.rs`), on the model upstream's
+    // image-generation tool pins (`codex-rs/ext/image-generation/src/tool.rs`). It is
+    // absent from the codex models manifest, so only this entry surfaces it (#18219).
+    { modelId: 'gpt-image-2', endpointTypes: ['openai-image-generation'] }
   ]
 })
