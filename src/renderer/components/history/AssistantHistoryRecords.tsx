@@ -13,6 +13,7 @@ import { createTopicActionContext, useTopicMenuPreset } from '@renderer/hooks/ch
 import { useAssistantTopicsSource } from '@renderer/hooks/resourceViewSources'
 import { useAssistants } from '@renderer/hooks/useAssistant'
 import { useConversationNavigation } from '@renderer/hooks/useConversationNavigation'
+import { useDayBoundaryNow } from '@renderer/hooks/useDayBoundaryNow'
 import { useNotesSettings } from '@renderer/hooks/useNotesSettings'
 import { useOptimisticResourceName } from '@renderer/hooks/useOptimisticResourceName'
 import { usePins } from '@renderer/hooks/usePins'
@@ -31,7 +32,7 @@ import { sortTopicsForDisplayGroups } from '@renderer/utils/chat/topicsHelpers'
 import { DEFAULT_ASSISTANT_EMOJI } from '@shared/data/presets/defaultAssistant'
 import type { Topic as ApiTopic } from '@shared/data/types/topic'
 import { Bot } from 'lucide-react'
-import { type ReactElement, type ReactNode, useCallback, useMemo, useState } from 'react'
+import { type ReactElement, type ReactNode, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { HistoryRecordsContent } from './components/HistoryRecordsContent'
@@ -65,8 +66,8 @@ const AssistantHistoryRecords = ({
   toolbarLeading
 }: AssistantHistoryRecordsProps) => {
   const { t } = useTranslation()
+  const groupNow = useDayBoundaryNow()
   const clearTopicMessages = useClearTopicMessages()
-  const [groupNow] = useState(() => new Date())
   const conversationNav = useConversationNavigation('assistants')
 
   const { topics: rawTopics, rendererTopics, isLoadingAll: isTopicsLoading } = useAssistantTopicsSource()
