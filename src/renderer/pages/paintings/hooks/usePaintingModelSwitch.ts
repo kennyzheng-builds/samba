@@ -1,5 +1,6 @@
 import { loggerService } from '@logger'
 import { useModels } from '@renderer/hooks/useModel'
+import type { Model } from '@shared/data/types/model'
 import { isEditImageModel } from '@shared/utils/model'
 import { useCallback } from 'react'
 
@@ -59,8 +60,9 @@ export function usePaintingModelSwitch({
         return
       }
 
+      let targetCatalog: ModelOption[]
       try {
-        await ensureProviderCatalog(providerId)
+        targetCatalog = await ensureProviderCatalog(providerId)
       } catch (error) {
         // Cold-cache + DB/IPC failure must not silently revert the dropdown —
         // surface it like the generate path instead of swallowing the switch.
@@ -68,6 +70,31 @@ export function usePaintingModelSwitch({
         presentPaintingGenerateError(error)
         return
       }
+
+      // Re-sourcing a model from another provider must not discard form state
+      // the target model still accepts — same fine-grained reset as above.
+      const nextModel = targetCatalog.find((option) => option.value === modelId)?.raw as Model | undefined
+      if (nextModel) {
+        const resetPatch = await computeModelFieldReset({
+          providerId,
+          oldProviderId: currentProviderId,
+          oldModelId: painting.model,
+          newModelId: modelId,
+          mode: tabToImageGenerationMode(painting.mode),
+          currentValues: painting.params ?? {}
+        })
+        const keepInputFiles = isEditImageModel(nextModel)
+        onPaintingChange({
+          params: { ...painting.params, ...resetPatch },
+          providerId,
+          model: modelId,
+          ...(keepInputFiles ? {} : { mode: 'generate', inputFiles: [] })
+        } as Partial<PaintingData>)
+        return
+      }
+
+      // Target model absent from the provider's catalog: no capability signal
+      // to preserve state against, so fall back to the clean slate.
       const targetPainting = createDefaultPainting({ providerId })
 
       onPaintingChange({
@@ -78,8 +105,7 @@ export function usePaintingModelSwitch({
         providerId,
         mode: 'generate',
         model: modelId,
-        // Switching providers resets the form context; never carry input
-        // images across to a different provider's model.
+        // Nothing vouches for the model accepting images — never carry them over.
         inputFiles: []
       } as Partial<PaintingData>)
     },
