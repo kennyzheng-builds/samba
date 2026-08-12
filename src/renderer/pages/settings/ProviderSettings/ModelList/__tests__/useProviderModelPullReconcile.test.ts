@@ -194,6 +194,28 @@ describe('useProviderModelPullReconcile', () => {
     expect(reconcileTriggerMock).not.toHaveBeenCalled()
   })
 
+  it('never marks models stale on a registry-sourced provider, whose catalog is not a served-model list', async () => {
+    // A model the user added by hand still gets a `presetModelId` whenever the global
+    // catalog knows its id, so on a login-based provider (codex/claude-code) every
+    // manual addition outside the shipped catalog used to come back "stale" — while
+    // the backend served it fine (#18219).
+    useProviderMock.mockReturnValue({
+      provider: { id: 'openai-codex', isEnabled: true, modelListSource: 'registry' },
+      enableProvider: enableProviderMock
+    })
+    const { result } = renderHook(() => useProviderModelPullReconcile('openai-codex'))
+
+    act(() => {
+      result.current.openPullReconcile()
+    })
+
+    await waitFor(() => {
+      expect(result.current.allModels).toEqual([fetchedModel, catalogModel, localModel])
+    })
+    expect(result.current.staleModelIds).toEqual([])
+    expect(result.current.staleModelCount).toBe(0)
+  })
+
   it('marks local models from the remote list as removable even without a preset model id', async () => {
     useModelsMock.mockReturnValue({
       models: [

@@ -111,15 +111,19 @@ export function useProviderModelPullReconcile(providerId: string) {
         .map((model) => model.id),
     [defaultModelIds, models, remoteModelIds]
   )
+  // Staleness means "the provider stopped serving this model", which only its live
+  // model list can attest. A registry-sourced provider has no such list — the pull
+  // returns the shipped catalog, a curated subset of what the backend actually
+  // serves — so absence from it says nothing about the model (#18219).
   const staleModels = useMemo(() => {
-    if (!hasLoadedCompleteRemoteModels) {
+    if (!hasLoadedCompleteRemoteModels || provider?.modelListSource === 'registry') {
       return []
     }
 
     return models.filter(
       (model) => !remoteModelIds.has(model.id) && model.presetModelId != null && model.presetModelId !== ''
     )
-  }, [hasLoadedCompleteRemoteModels, models, remoteModelIds])
+  }, [hasLoadedCompleteRemoteModels, models, provider?.modelListSource, remoteModelIds])
 
   const loadModels = useCallback(async () => {
     const sequence = ++loadModelsSequenceRef.current
