@@ -29,7 +29,7 @@ import { customFetch } from '../utils/customFetch'
 import { getBaseUrl, getExtraHeaders, routeToEndpoint } from '../utils/provider'
 import { normalizeArkResponsesResponse, stripArkUnsupportedIncludes } from './ark'
 import { generateSignature } from './cherryai'
-import { buildCodexRequestHeaders, coerceCodexRequestBody } from './codex'
+import { buildCodexRequestHeaders, coerceCodexRequestBody, isCodexResponsesRequest } from './codex'
 import { COPILOT_DEFAULT_HEADERS } from './constants'
 import type { ServingAuthMethod, ServingCredentialReceipt } from './credential'
 import { appendDashScopeWebExtractor } from './custom/dashscope/dashscopeWebExtractor'
@@ -429,7 +429,7 @@ function buildCodexFetch() {
             accessToken: creds.accessToken,
             accountId: creds.accountId ?? null
           }),
-          body: coerceCodexRequestBody(init?.body)
+          body: isCodexResponsesRequest(input) ? coerceCodexRequestBody(init?.body) : init?.body
         }
       }),
       customFetch,

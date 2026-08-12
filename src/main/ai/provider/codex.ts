@@ -13,6 +13,17 @@ export interface CodexCredentials {
 }
 
 /**
+ * Whether a codex request targets the Responses endpoint. The provider also
+ * serves `images/generations` off the same base URL, whose body must not be
+ * reshaped by {@link coerceCodexRequestBody} — Responses-only fields there are
+ * unrecognized request arguments.
+ */
+export function isCodexResponsesRequest(input: RequestInfo | URL): boolean {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  return url.split('?')[0].endsWith('/responses')
+}
+
+/**
  * Coerce the OpenAI Responses request body into the shape the ChatGPT codex
  * backend requires: server-side `store` is rejected, response length caps are
  * not accepted, and with store off the encrypted reasoning must be included so

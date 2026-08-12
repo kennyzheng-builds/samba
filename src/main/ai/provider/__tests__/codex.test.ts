@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildCodexRequestHeaders, coerceCodexRequestBody } from '../codex'
+import { buildCodexRequestHeaders, coerceCodexRequestBody, isCodexResponsesRequest } from '../codex'
+
+describe('isCodexResponsesRequest', () => {
+  const codexBase = 'https://chatgpt.com/backend-api/codex'
+
+  it('excludes the image endpoints, whose bodies reject Responses-only fields', () => {
+    expect(isCodexResponsesRequest(`${codexBase}/images/generations`)).toBe(false)
+    expect(isCodexResponsesRequest(new URL(`${codexBase}/images/edits`))).toBe(false)
+  })
+
+  it('matches the Responses endpoint however the SDK passes it', () => {
+    expect(isCodexResponsesRequest(`${codexBase}/responses`)).toBe(true)
+    expect(isCodexResponsesRequest(new URL(`${codexBase}/responses`))).toBe(true)
+    expect(isCodexResponsesRequest(new Request(`${codexBase}/responses?stream=true`))).toBe(true)
+  })
+})
 
 describe('coerceCodexRequestBody', () => {
   it('forces store:false and adds encrypted reasoning to include', () => {
