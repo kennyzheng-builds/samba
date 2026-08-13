@@ -711,13 +711,11 @@ export const QuickPanelView: React.FC<Props> = ({ inputAdapter }) => {
             return true
           }
 
-          // When visible and not collapsed, intercept every Enter variant.
-          // Plain Enter selects an item; modified Enter is only intercepted.
+          // Plain Enter selects an item, modified Enter never does — hand the latter back so the
+          // host can still honour a send-message shortcut such as Ctrl+Enter.
           if (e.ctrlKey || e.metaKey || e.altKey) {
-            e.preventDefault()
-            e.stopPropagation()
             setIsMouseOver(false)
-            return true
+            return false
           }
 
           if (list?.[activeIndex]) {

@@ -58,8 +58,8 @@ vi.mock('@renderer/components/VirtualList', async () => {
   }
 })
 
-function createKeyDownEvent(key: string) {
-  const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key })
+function createKeyDownEvent(key: string, modifiers: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ...modifiers })
   const preventDefault = vi.spyOn(event, 'preventDefault')
   const stopPropagation = vi.spyOn(event, 'stopPropagation')
 
@@ -1020,6 +1020,37 @@ describe('QuickPanelView', () => {
 
     expect(action).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('quick-panel')).toHaveClass('visible')
+  })
+
+  it.each([
+    ['Ctrl+Enter', { ctrlKey: true }],
+    ['Command+Enter', { metaKey: true }],
+    ['Alt+Enter', { altKey: true }]
+  ])('leaves %s to the host instead of selecting an item', async (_, modifiers) => {
+    const action = vi.fn()
+    const captureDispatch = vi.fn()
+    const items: QuickPanelListItem[] = [{ id: 'first', label: 'First action', icon: '1', action }]
+
+    render(
+      <QuickPanelProvider>
+        <PanelHarness captureDispatch={captureDispatch} items={items} />
+      </QuickPanelProvider>
+    )
+
+    await screen.findByText('First action')
+
+    const dispatchKeyDown = captureDispatch.mock.calls.at(-1)?.[0] as QuickPanelContextType['dispatchKeyDown']
+    const { event, preventDefault, stopPropagation } = createKeyDownEvent('Enter', modifiers)
+
+    let handled = true
+    act(() => {
+      handled = dispatchKeyDown(event)
+    })
+
+    expect(handled).toBe(false)
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+    expect(action).not.toHaveBeenCalled()
   })
 
   it('anchors bottom-fixed items outside the virtual list and keeps them last in keyboard navigation', async () => {

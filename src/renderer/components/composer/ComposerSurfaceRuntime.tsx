@@ -1466,9 +1466,13 @@ export default function ComposerSurfaceRuntime({
             return false
           }
           if (qp.isVisible && isEnterPressed) {
-            event.preventDefault()
-            event.stopPropagation()
-            return true
+            // A modified Enter never selects a panel item, so let a matching send shortcut through.
+            const isModifiedEnter = event.ctrlKey || event.metaKey || event.altKey
+            if (!isModifiedEnter || !isComposerSendKeyPressed(event, sendMessageShortcutRef.current)) {
+              event.preventDefault()
+              event.stopPropagation()
+              return true
+            }
           }
         }
 
