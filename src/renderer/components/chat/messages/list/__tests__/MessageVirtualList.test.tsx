@@ -9,8 +9,16 @@ const runtimeMockState = vi.hoisted(() => ({
   isScrollToBottomButtonVisible: false,
   takeUserControl: vi.fn(),
   scrollToBottom: vi.fn(),
+  scrollToTop: vi.fn(),
   notifyWheelIntent: vi.fn(),
   scrollByWheel: vi.fn(() => true),
+  // jsdom leaves `scrollBy` unimplemented, so the runtime stand-in applies the
+  // delta itself and the viewport outcome stays observable in these tests.
+  scrollByOffset: vi.fn((deltaY: number) => {
+    const scroller = runtimeMockState.scrollerRef.current
+    if (scroller) scroller.scrollTop += deltaY
+    return true
+  }),
   markUserInput: vi.fn(),
   beginScrollbarDrag: vi.fn(),
   endScrollbarDrag: vi.fn(),
@@ -89,8 +97,10 @@ vi.mock('../chatVirtualizerRuntime', async () => {
       isScrollToBottomButtonVisible: runtimeMockState.isScrollToBottomButtonVisible,
       takeUserControl: runtimeMockState.takeUserControl,
       scrollToBottom: runtimeMockState.scrollToBottom,
+      scrollToTop: runtimeMockState.scrollToTop,
       notifyWheelIntent: runtimeMockState.notifyWheelIntent,
       scrollByWheel: runtimeMockState.scrollByWheel,
+      scrollByOffset: runtimeMockState.scrollByOffset,
       markUserInput: runtimeMockState.markUserInput,
       beginScrollbarDrag: runtimeMockState.beginScrollbarDrag,
       endScrollbarDrag: runtimeMockState.endScrollbarDrag,
@@ -121,8 +131,10 @@ describe('MessageVirtualList', () => {
     runtimeMockState.isScrollToBottomButtonVisible = false
     runtimeMockState.takeUserControl.mockClear()
     runtimeMockState.scrollToBottom.mockClear()
+    runtimeMockState.scrollToTop.mockClear()
     runtimeMockState.notifyWheelIntent.mockClear()
     runtimeMockState.scrollByWheel.mockClear()
+    runtimeMockState.scrollByOffset.mockClear()
     runtimeMockState.markUserInput.mockClear()
     runtimeMockState.beginScrollbarDrag.mockClear()
     runtimeMockState.endScrollbarDrag.mockClear()
@@ -376,6 +388,101 @@ describe('MessageVirtualList', () => {
     expect(runtimeMockState.markUserInput).not.toHaveBeenCalled()
   })
 
+  describe('keyboard scrolling', () => {
+    const PAGE_PX = 500 * 0.9
+    const LINE_PX = 48
+
+    // Mirrors the real chat view: the list and the composer are siblings under
+    // the chat shell's center column, and a dialog portals outside of it.
+    const renderChatView = () => {
+      render(
+        <>
+          <div data-chat-app-shell-center>
+            <MessageVirtualList
+              items={['message-1']}
+              getItemKey={(item) => item}
+              renderItem={(item) => <span>{item}</span>}
+            />
+            <div contentEditable data-testid="composer" suppressContentEditableWarning>
+              draft
+            </div>
+          </div>
+          <div role="dialog">
+            <input data-testid="dialog-input" />
+          </div>
+        </>
+      )
+      const scroller = document.querySelector('[data-message-virtual-list-scroller]') as HTMLElement
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2_000 })
+      scroller.scrollTop = 100
+      return scroller
+    }
+
+    // The scroller is not focusable, so the keys land on the body — native
+    // scrolling never reaches the message viewport there.
+    it('scrolls the message viewport for keys pressed with no focused widget', () => {
+      const scroller = renderChatView()
+
+      fireEvent.keyDown(document.body, { key: 'PageDown' })
+      expect(scroller.scrollTop).toBeCloseTo(100 + PAGE_PX)
+
+      fireEvent.keyDown(document.body, { key: 'ArrowUp' })
+      expect(scroller.scrollTop).toBeCloseTo(100 + PAGE_PX - LINE_PX)
+    })
+
+    it('sends Home and End through the runtime instead of a pixel delta', () => {
+      renderChatView()
+
+      fireEvent.keyDown(document.body, { key: 'End' })
+      expect(runtimeMockState.scrollToBottom).toHaveBeenCalledTimes(1)
+
+      fireEvent.keyDown(document.body, { key: 'Home' })
+      expect(runtimeMockState.scrollToTop).toHaveBeenCalledTimes(1)
+      expect(runtimeMockState.scrollByOffset).not.toHaveBeenCalled()
+    })
+
+    // The composer takes focus back on its own, so this is where the user
+    // actually presses these keys.
+    it('pages the transcript from the composer without disturbing the caret keys', () => {
+      const scroller = renderChatView()
+      const composer = screen.getByTestId('composer')
+
+      for (const key of ['ArrowUp', 'ArrowDown', 'Home', 'End']) fireEvent.keyDown(composer, { key })
+      expect(scroller.scrollTop).toBe(100)
+      expect(runtimeMockState.scrollByOffset).not.toHaveBeenCalled()
+      expect(runtimeMockState.scrollToTop).not.toHaveBeenCalled()
+      expect(runtimeMockState.scrollToBottom).not.toHaveBeenCalled()
+
+      fireEvent.keyDown(composer, { key: 'PageDown' })
+      expect(scroller.scrollTop).toBeCloseTo(100 + PAGE_PX)
+    })
+
+    it('leaves an editor outside this chat view alone', () => {
+      const scroller = renderChatView()
+
+      fireEvent.keyDown(screen.getByTestId('dialog-input'), { key: 'PageDown' })
+
+      expect(scroller.scrollTop).toBe(100)
+      expect(runtimeMockState.scrollByOffset).not.toHaveBeenCalled()
+    })
+
+    it('yields to handlers that already claimed the key or to shortcut modifiers', () => {
+      const scroller = renderChatView()
+
+      const claimed = new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true })
+      claimed.preventDefault()
+      document.body.dispatchEvent(claimed)
+
+      fireEvent.keyDown(document.body, { key: 'ArrowDown', ctrlKey: true })
+      fireEvent.keyDown(document.body, { key: 'End', metaKey: true })
+
+      expect(scroller.scrollTop).toBe(100)
+      expect(runtimeMockState.scrollByOffset).not.toHaveBeenCalled()
+      expect(runtimeMockState.scrollToBottom).not.toHaveBeenCalled()
+    })
+  })
+
   it('ignores purely horizontal wheel input instead of taking scroll ownership', () => {
     render(
       <MessageVirtualList
@@ -447,6 +554,7 @@ describe('MessageVirtualList', () => {
     const scroller = document.querySelector('[data-message-virtual-list-scroller]') as HTMLElement
     expect(scroller).toBeTruthy()
     const removeSpy = vi.spyOn(scroller, 'removeEventListener')
+    const documentRemoveSpy = vi.spyOn(document, 'removeEventListener')
 
     const item = screen.getByTestId('item-0')
     fireEvent.pointerDown(item)
@@ -458,7 +566,14 @@ describe('MessageVirtualList', () => {
     unmount()
     expect(removeSpy).toHaveBeenCalledWith('pointerdown', expect.any(Function))
     expect(removeSpy).toHaveBeenCalledWith('pointermove', expect.any(Function))
-    expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
+    // A document-level listener outlives the component unless it is torn down,
+    // so an unmounted list would keep hijacking every scroll key in the app.
+    expect(documentRemoveSpy).toHaveBeenCalledWith('keydown', expect.any(Function))
+    documentRemoveSpy.mockRestore()
+
+    runtimeMockState.scrollByOffset.mockClear()
+    fireEvent.keyDown(document.body, { key: 'PageDown' })
+    expect(runtimeMockState.scrollByOffset).not.toHaveBeenCalled()
   })
 
   it('renders a scroll-to-bottom button when the runtime is far from bottom', () => {

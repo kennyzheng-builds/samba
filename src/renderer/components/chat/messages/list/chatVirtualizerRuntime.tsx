@@ -127,6 +127,10 @@ export interface ChatVirtualizerRuntime<T> {
   notifyWheelIntent(deltaY: number): void
   /** Apply a wheel forwarded from an isolated child document under this runtime's ownership. */
   scrollByWheel(deltaY: number): boolean
+  /** Move the viewport by a raw pixel delta under this runtime's ownership (keyboard scroll keys). */
+  scrollByOffset(deltaY: number): boolean
+  /** Jump to the oldest message under the reading-mode owner. */
+  scrollToTop(behavior?: ScrollBehavior): void
   /**
    * Mark that a real user scroll input just happened. Wheel is wired through
    * `scrollerProps.onWheel`; the host calls this for pointer drags and
@@ -573,17 +577,21 @@ export function useChatVirtualizerRuntime<T>({
     [markUserInput, smoothScroll, takeUserControl]
   )
 
-  const scrollByWheel = useCallback(
+  const scrollByOffset = useCallback(
     (deltaY: number) => {
       const scroller = scrollerRef.current
       if (!scroller) return false
 
-      const boundedDeltaY = clampForwardedWheelDelta(deltaY)
-      notifyWheelIntent(boundedDeltaY)
-      scroller.scrollBy({ top: boundedDeltaY })
+      notifyWheelIntent(deltaY)
+      scroller.scrollBy({ top: deltaY })
       return true
     },
     [notifyWheelIntent]
+  )
+
+  const scrollByWheel = useCallback(
+    (deltaY: number) => scrollByOffset(clampForwardedWheelDelta(deltaY)),
+    [scrollByOffset]
   )
 
   const onWheel = useCallback((event: WheelEvent) => notifyWheelIntent(event.deltaY), [notifyWheelIntent])
@@ -933,9 +941,11 @@ export function useChatVirtualizerRuntime<T>({
     isScrollToBottomButtonVisible,
     takeUserControl,
     scrollToBottom,
+    scrollToTop,
     scrollToElement,
     notifyWheelIntent,
     scrollByWheel,
+    scrollByOffset,
     markUserInput,
     beginScrollbarDrag,
     endScrollbarDrag

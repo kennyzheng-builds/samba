@@ -29,7 +29,13 @@ export const MESSAGE_VIRTUAL_LIST_DEFAULT_TOP_PADDING_PX = 6
 export const MESSAGE_VIRTUAL_LIST_DEFAULT_BOTTOM_PADDING_PX = 12
 const MESSAGE_SCROLL_TO_BOTTOM_BUTTON_DEFAULT_BOTTOM_OFFSET_PX = 24
 const KEYBOARD_SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'])
+const KEYBOARD_PAGE_KEYS = new Set(['PageUp', 'PageDown', ' ', 'Spacebar'])
 const KEYBOARD_ACTIVATION_SELECTOR = 'button,a,input,textarea,select,[role="button"]'
+const KEYBOARD_EDITABLE_SELECTOR = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])'
+const KEYBOARD_EDITOR_FALLTHROUGH_KEYS = new Set(['PageUp', 'PageDown'])
+const CHAT_VIEW_SELECTOR = '[data-chat-app-shell-center]'
+const KEYBOARD_SCROLL_LINE_PX = 48
+const KEYBOARD_SCROLL_PAGE_RATIO = 0.9
 
 function isKeyboardScrollIntent(event: KeyboardEvent, scroller: HTMLElement): boolean {
   if (KEYBOARD_SCROLL_KEYS.has(event.key)) return true
@@ -42,6 +48,26 @@ function getKeyboardScrollDelta(event: KeyboardEvent): number {
   if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') return -1
   if (event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'End') return 1
   return event.shiftKey ? -1 : 1
+}
+
+function getKeyboardScrollDistance(event: KeyboardEvent, viewportHeight: number): number {
+  const step = KEYBOARD_PAGE_KEYS.has(event.key) ? viewportHeight * KEYBOARD_SCROLL_PAGE_RATIO : KEYBOARD_SCROLL_LINE_PX
+  return getKeyboardScrollDelta(event) * step
+}
+
+/**
+ * Whether these keys belong to the message viewport. The scroller is not
+ * focusable, so scroll keys reach the document with focus on the body or —
+ * since the chat composer takes focus back on its own — inside an editor.
+ */
+function ownsKeyboardScroll(event: KeyboardEvent, target: HTMLElement | null, scroller: HTMLElement): boolean {
+  if (!target || target === target.ownerDocument.body) return true
+  if (!target.closest(KEYBOARD_EDITABLE_SELECTOR)) return scroller.contains(target)
+  // An editor keeps its caret keys. Page keys move no chat composer's caret
+  // anywhere useful, so the transcript takes those — but only from an editor
+  // sharing this list's chat view, never from a dialog floating above it.
+  if (!KEYBOARD_EDITOR_FALLTHROUGH_KEYS.has(event.key)) return false
+  return scroller.closest(CHAT_VIEW_SELECTOR)?.contains(target) ?? false
 }
 
 function getEventTargetElement(target: EventTarget | null): HTMLElement | null {
@@ -135,7 +161,15 @@ export function MessageVirtualList<T>({
     keepMountedKeys
   })
   const [scrollerElement, setScrollerElement] = useState<HTMLDivElement | null>(null)
-  const { beginScrollbarDrag, endScrollbarDrag, scrollToBottom, markUserInput, takeUserControl } = runtime
+  const {
+    beginScrollbarDrag,
+    endScrollbarDrag,
+    scrollByOffset,
+    scrollToBottom,
+    scrollToTop,
+    markUserInput,
+    takeUserControl
+  } = runtime
   const { onWheel } = runtime.scrollerProps
   // Latch the captured node like TabRouter does: a background tab detaches the
   // ref (element === null) while its DOM node lives on, and clearing this state
@@ -206,24 +240,40 @@ export function MessageVirtualList<T>({
       endScrollbarDrag()
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isKeyboardScrollIntent(event, scrollerElement)) return
+      if (event.defaultPrevented || event.isComposing) return
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (!isKeyboardScrollIntent(event, scrollerElement)) return
+      if (!ownsKeyboardScroll(event, getEventTargetElement(event.target), scrollerElement)) return
       const nestedScroller = findNestedScroller(event.target, scrollerElement)
       if (nestedScroller && canConsumeVerticalWheel(nestedScroller, getKeyboardScrollDelta(event))) return
+
+      event.preventDefault()
       markUserInput()
+      if (event.key === 'Home') scrollToTop()
+      else if (event.key === 'End') scrollToBottom()
+      else scrollByOffset(getKeyboardScrollDistance(event, scrollerElement.clientHeight))
     }
     scrollerElement.addEventListener('pointerdown', onPointerDown, { passive: true })
     scrollerElement.addEventListener('pointermove', onPointerMove, { passive: true })
     ownerDocument.addEventListener('pointerup', onPointerEnd, { passive: true })
     ownerDocument.addEventListener('pointercancel', onPointerEnd, { passive: true })
-    scrollerElement.addEventListener('keydown', onKeyDown)
+    ownerDocument.addEventListener('keydown', onKeyDown)
     return () => {
       scrollerElement.removeEventListener('pointerdown', onPointerDown)
       scrollerElement.removeEventListener('pointermove', onPointerMove)
       ownerDocument.removeEventListener('pointerup', onPointerEnd)
       ownerDocument.removeEventListener('pointercancel', onPointerEnd)
-      scrollerElement.removeEventListener('keydown', onKeyDown)
+      ownerDocument.removeEventListener('keydown', onKeyDown)
     }
-  }, [beginScrollbarDrag, endScrollbarDrag, markUserInput, scrollerElement])
+  }, [
+    beginScrollbarDrag,
+    endScrollbarDrag,
+    markUserInput,
+    scrollByOffset,
+    scrollToBottom,
+    scrollToTop,
+    scrollerElement
+  ])
 
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom()
