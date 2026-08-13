@@ -6,6 +6,21 @@
  */
 const ARK_UNSUPPORTED_INCLUDES = new Set(['web_search_call.action.sources'])
 
+/**
+ * Ark's image families: Seedream (text-to-image, group images, reference-image edits)
+ * and SeedEdit (edit-only). Both speak Ark's single `POST /images/generations`, where a
+ * reference image rides the JSON `image` field rather than a multipart `/images/edits`.
+ *
+ * Matched on the model id, not the host: the protocol belongs to the model, and any
+ * gateway or self-hosted relay can front these — often renaming the `doubao-` prefix
+ * away — so the provider id says nothing about which wire the model actually speaks.
+ */
+const ARK_IMAGE_MODEL_PATTERN = /seedream|seededit/i
+
+export function isArkImageModel(modelId: string): boolean {
+  return ARK_IMAGE_MODEL_PATTERN.test(modelId)
+}
+
 type JsonObject = Record<string, unknown>
 
 function isJsonObject(value: unknown): value is JsonObject {

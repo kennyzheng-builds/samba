@@ -1093,6 +1093,107 @@ describe('providerToAiSdkConfig — builder dispatch matrix', () => {
       expect(settings.baseURL).toBe('https://ark.cn-beijing.volces.com/api/v3')
     })
 
+    it('routes a Seedream IMAGE model on a self-added Ark provider through Doubao config', async () => {
+      // Every image override above keys off the provider id, so a provider the user
+      // created themselves reached the generic OpenAICompatibleImageModel, which swaps to
+      // a multipart /images/edits the moment a reference image is attached — an endpoint
+      // Ark does not serve. Text-to-image worked; image-to-image 404'd.
+      const provider = makeProvider({
+        id: 'my-ark',
+        defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+        endpointConfigs: {
+          [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3/' }
+        }
+      })
+      const model = makeModel({
+        providerId: 'my-ark',
+        apiModelId: 'doubao-seedream-5-0-pro',
+        capabilities: [MODEL_CAPABILITY.IMAGE_GENERATION]
+      })
+
+      const config = await providerToAiSdkConfig(provider, model)
+      const settings = config.providerSettings as Record<string, unknown>
+
+      expect(config.providerId).toBe('doubao')
+      // Unchanged from what the openai-compatible builder resolved: the Ark image model
+      // appends `/images/generations` to exactly the host text-to-image already reaches.
+      expect(settings.baseURL).toBe('https://ark.cn-beijing.volces.com/api/v3')
+    })
+
+    it('routes a relay-renamed Seedream IMAGE model on a New API host through Doubao config', async () => {
+      // New API reports image models under `openai-image-generation`, which its catalog
+      // never declares, so they resolve to openai-compatible rather than the `newapi`
+      // adapter — whose imageModel is the same generic /images/edits model anyway. The
+      // relay may also rename the model, so the `doubao-` prefix cannot be required.
+      const provider = makeProvider({
+        id: 'my-relay',
+        presetProviderId: 'new-api',
+        defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+        endpointConfigs: {
+          [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: {
+            baseUrl: 'https://relay.example.com/v1',
+            adapterFamily: 'newapi'
+          }
+        }
+      })
+      const model = makeModel({
+        providerId: 'my-relay',
+        apiModelId: 'Seedream-4.5',
+        capabilities: [MODEL_CAPABILITY.IMAGE_GENERATION],
+        endpointTypes: [ENDPOINT_TYPE.OPENAI_IMAGE_GENERATION]
+      })
+
+      const config = await providerToAiSdkConfig(provider, model)
+      const settings = config.providerSettings as Record<string, unknown>
+
+      expect(config.providerId).toBe('doubao')
+      expect(settings.baseURL).toBe('https://relay.example.com/v1')
+    })
+
+    it('leaves genuinely OpenAI-family IMAGE models on a self-added provider on openai-compatible', async () => {
+      // gpt-image really does edit through multipart /images/edits, so the Ark override
+      // must not generalise to every image model on a provider it does not recognise.
+      const provider = makeProvider({
+        id: 'my-relay',
+        defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+        endpointConfigs: {
+          [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://relay.example.com/v1' }
+        }
+      })
+      const model = makeModel({
+        providerId: 'my-relay',
+        apiModelId: 'gpt-image-1',
+        capabilities: [MODEL_CAPABILITY.IMAGE_GENERATION]
+      })
+
+      const config = await providerToAiSdkConfig(provider, model)
+      expect(config.providerId).toBe('openai-compatible')
+    })
+
+    it('keeps a Seedream IMAGE model on the built-in DMXAPI host on its own bespoke transport', async () => {
+      // Ordering guard: DMXAPI serves Seedream through its own responses-string family
+      // (`resolveDmxapiFamily`), so the model-id-keyed Ark override must not outrank the
+      // host-keyed one.
+      const provider = makeProvider({
+        id: 'dmxapi',
+        defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+        endpointConfigs: {
+          [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: {
+            baseUrl: 'https://www.dmxapi.cn',
+            adapterFamily: 'openai-compatible'
+          }
+        }
+      })
+      const model = makeModel({
+        providerId: 'dmxapi',
+        apiModelId: 'doubao-seedream-4-0',
+        capabilities: [MODEL_CAPABILITY.IMAGE_GENERATION]
+      })
+
+      const config = await providerToAiSdkConfig(provider, model)
+      expect(config.providerId).toBe('dmxapi')
+    })
+
     it('leaves Doubao CHAT models on openai-compatible (image-only override)', async () => {
       const provider = makeProvider({
         id: 'doubao',

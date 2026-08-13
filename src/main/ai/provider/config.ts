@@ -39,7 +39,7 @@ import type { ProviderConfig } from '../types'
 import { type AppProviderId, appProviderIds, type AppProviderSettingsMap } from '../types'
 import { customFetch } from '../utils/customFetch'
 import { getBaseUrl, getExtraHeaders, routeToEndpoint } from '../utils/provider'
-import { normalizeArkResponsesResponse, stripArkUnsupportedIncludes } from './ark'
+import { isArkImageModel, normalizeArkResponsesResponse, stripArkUnsupportedIncludes } from './ark'
 import { generateSignature } from './cherryai'
 import { buildCodexRequestHeaders, coerceCodexRequestBody } from './codex'
 import { COPILOT_DEFAULT_HEADERS } from './constants'
@@ -343,7 +343,27 @@ export async function resolveProviderAiSdkConfig(
     },
     { match: (_, id) => id === 'newapi', build: withSelectedApiKey(buildNewApiConfig) },
     { match: (_, id) => id === 'aihubmix', build: withSelectedApiKey(buildAiHubMixConfig) },
-    { match: (_, id) => id === 'dmxapi', build: withSelectedApiKey(buildDmxapiConfig) }
+    { match: (_, id) => id === 'dmxapi', build: withSelectedApiKey(buildDmxapiConfig) },
+    // Every image override above is keyed by HOST, but Ark's image protocol is a property
+    // of the MODEL: a self-added Ark provider or a relay fronting Seedream/SeedEdit still
+    // serves the single `/images/generations`. Those hosts fell through to the generic
+    // openai-compatible image model, which swaps to a multipart `/images/edits` as soon as
+    // `files` is set — an endpoint Ark does not serve, so text-to-image worked and
+    // image-to-image 404'd. Last in the list, so it only catches what would otherwise
+    // reach `buildOpenAICompatibleConfig`; baseURL is passed through untouched, leaving
+    // the request on the exact host text-to-image already succeeds on.
+    {
+      match: (_, id) =>
+        id === 'openai-compatible' && isGenerateImageModel(model) && isArkImageModel(model.apiModelId ?? model.id),
+      build: withSelectedApiKey((ctx) => ({
+        providerId: 'doubao',
+        endpoint: ctx.endpoint,
+        providerSettings: {
+          ...ctx.baseConfig,
+          headers: { ...defaultAppHeaders(), ...getExtraHeaders(ctx.actualProvider) }
+        }
+      }))
+    }
   ]
 
   const builder = builders.find((b) => b.match(provider, aiSdkProviderId))
