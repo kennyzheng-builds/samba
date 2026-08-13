@@ -739,7 +739,6 @@
 }
 
 .code-editor .cm-editor .cm-scroller {
-  font-family: var(--code-font-family);
   border-radius: inherit;
 }
 
