@@ -415,6 +415,22 @@ describe('useChatWriteActions — edit message', () => {
     ])
   })
 
+  it('carries the row turn options through the whole-column data write', async () => {
+    // `MessageService.update` replaces the whole `data` column, so a body without turnOptions
+    // silently drops the reply's reasoning effort — which regenerate then inherits from.
+    const editedParts = [{ type: 'text', text: 'edited' }]
+    const assistant = uiMsg('m1', 'assistant', 'u1')
+    assistant.metadata.turnOptions = { reasoningEffort: 'high', fastMode: false }
+    const { actions, cache } = renderActions([assistant])
+
+    await actions.editMessage('m1', editedParts as any)
+
+    expect(cache.patchMessageTrigger).toHaveBeenCalledWith({
+      params: { id: 'm1' },
+      body: { data: { turnOptions: { reasoningEffort: 'high', fastMode: false }, parts: editedParts } }
+    })
+  })
+
   it('rolls back the optimistic branch when persisting edited parts fails', async () => {
     const editedParts = [{ type: 'text', text: 'edited' }]
     const error = new Error('patch failed')

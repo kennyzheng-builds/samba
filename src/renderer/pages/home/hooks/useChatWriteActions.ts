@@ -274,6 +274,9 @@ export function useChatWriteActions(params: Params): Result {
 
   const handleEditMessage = useCallback<ChatWriteActions['editMessage']>(
     async (messageId, editedParts) => {
+      // The PATCH replaces the whole `data` column, so the row's turn options have to ride along
+      // or the edit silently strips the reasoning effort / fast mode a regenerate inherits from.
+      const turnOptions = uiMessages.find((message) => message.id === messageId)?.metadata?.turnOptions
       await seedOptimisticBranch((items) => {
         const patch = (msg: BranchMessagesResponse['items'][number]['message']) =>
           msg.id === messageId ? { ...msg, data: { ...msg.data, parts: editedParts } } : msg
@@ -284,14 +287,17 @@ export function useChatWriteActions(params: Params): Result {
         }))
       })
       try {
-        await patchMessageTrigger({ params: { id: messageId }, body: { data: { parts: editedParts } } })
+        await patchMessageTrigger({
+          params: { id: messageId },
+          body: { data: { ...(turnOptions && { turnOptions }), parts: editedParts } }
+        })
         logger.info('Edited message', { messageId, partCount: editedParts.length })
       } catch (err) {
         await rollbackBranch()
         throw err
       }
     },
-    [patchMessageTrigger, rollbackBranch, seedOptimisticBranch]
+    [patchMessageTrigger, rollbackBranch, seedOptimisticBranch, uiMessages]
   )
 
   const capabilityBody = useMemo<Record<string, unknown>>(

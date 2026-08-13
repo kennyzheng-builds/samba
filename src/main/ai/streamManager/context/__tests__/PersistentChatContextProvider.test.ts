@@ -747,6 +747,28 @@ describe('PersistentChatContextProvider — steer continuation history', () => {
       )
     ).rejects.toMatchObject({ reason: aiStreamAdmissionReasons.TARGET_NOT_IN_LIVE_GROUP })
   })
+
+  it('serves an in-place edited assistant reply as the edit, not the original', async () => {
+    // What PATCH /messages/:id writes when the user saves an assistant edit (#18484).
+    messageService.update('a1', { data: { parts: [{ type: 'text', text: 'EDITED answer' }] } })
+
+    const prepared = await provider.prepareDispatch(
+      makeSubscriber(),
+      {
+        trigger: 'submit-message',
+        topicId: 'topic-1',
+        parentAnchorId: 'a1',
+        userMessageParts: [{ type: 'text', text: 'follow-up' }]
+      } as AiStreamOpenRequest,
+      { hasLiveStream: false }
+    )
+
+    expect(flatten(prepared.models[0].request.messages!)).toEqual([
+      { role: 'user', text: 'first question' },
+      { role: 'assistant', text: 'EDITED answer' },
+      { role: 'user', text: 'follow-up' }
+    ])
+  })
 })
 
 describe('PersistentChatContextProvider — prepareContinueDispatch (resume-after-approval)', () => {
