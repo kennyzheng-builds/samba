@@ -7,7 +7,12 @@ import { useBlurHandler, useHeightListener, useLanguageExtensions, useSaveKeymap
 import type { CodeEditorProps } from './types'
 import { prepareCodeChanges } from './utils'
 
-const codeEditorGutterTheme = EditorView.theme({
+const codeEditorTheme = EditorView.theme({
+  // CodeMirror's base theme pins `.cm-scroller` to `monospace` from an unlayered stylesheet,
+  // which no `@layer app` rule can outrank — so the code font has to come through a theme too.
+  '.cm-scroller': {
+    fontFamily: 'var(--code-font-family, monospace)'
+  },
   '.cm-gutters': {
     backgroundColor: 'transparent',
     borderRight: 'none',
@@ -153,7 +158,7 @@ const CodeEditor = ({
       ...(extensions ?? []),
       ...langExtensions,
       ...(wrapped ? [EditorView.lineWrapping] : []),
-      codeEditorGutterTheme,
+      codeEditorTheme,
       saveKeymapExtension,
       blurExtension,
       heightListenerExtension
