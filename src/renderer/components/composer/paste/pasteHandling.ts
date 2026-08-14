@@ -1,6 +1,7 @@
 import { loggerService } from '@logger'
 import { toast } from '@renderer/services/toast'
 import { COMPOSER_FILE_KIND, type PastedTextFileMetadata } from '@renderer/types/file'
+import { formatErrorMessageWithPrefix } from '@renderer/utils/error'
 import { getFileExtension, isSupportedFile, removeFileExtension } from '@renderer/utils/file'
 import { type ComposerAttachment, toComposerAttachment } from '@renderer/utils/message/composerAttachment'
 
@@ -117,7 +118,9 @@ export const handlePaste = async (
       } catch (error) {
         logger.error('onPaste:', error as Error)
         if (t) {
-          toast.error(t('chat.input.file_error'))
+          // Carry the reason: the failures that outlive a restart (an unusable temp dir,
+          // a denied write) are indistinguishable from a transient one without it.
+          toast.error(formatErrorMessageWithPrefix(error, t('chat.input.file_error')))
         }
       }
       return true

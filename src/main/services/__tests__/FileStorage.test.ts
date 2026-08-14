@@ -1,3 +1,4 @@
+import { application } from '@application'
 import { dialog, shell } from 'electron'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -44,6 +45,76 @@ describe('FileStorage', () => {
 
     it('leaves a path without the ~/ prefix unchanged', async () => {
       await expect(fileStorage.showInFolder(event, '/no/such/path/x.txt')).rejects.toThrow('/no/such/path/x.txt')
+    })
+  })
+
+  describe('createTempFile', () => {
+    let tempRoot: string
+
+    beforeEach(() => {
+      tempRoot = path.join(os.tmpdir(), `filestorage-temp-root-${uniqueId()}`)
+      vi.mocked(application.getPath).mockImplementation((key: string) => {
+        if (key !== 'app.temp') return `/mock/${key}`
+        // Mirrors the volatile auto-ensure in Application.getPath: best-effort mkdir on
+        // every lookup, failure swallowed, path handed back either way.
+        try {
+          fs.mkdirSync(tempRoot, { recursive: true })
+        } catch {
+          // matches production: a lookup never fails on an unwritable temp dir
+        }
+        return tempRoot
+      })
+    })
+
+    afterEach(() => {
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    })
+
+    it('fails with the reason the temp dir is unusable instead of handing out the path', async () => {
+      // The persistent failures — a stray regular file squatting the temp dir name, a
+      // read-only or permission-denied temp root — survive restarts and reinstalls. The
+      // path lookup swallows them, so without this the renderer only ever saw an ENOENT
+      // on `temp_file_<uuid>_image.png` and no way to tell what to fix.
+      fs.writeFileSync(tempRoot, 'not a directory')
+
+      await expect(fileStorage.createTempFile(event, 'image.png')).rejects.toThrow(tempRoot)
+    })
+
+    it('survives the temp dir being reaped between createTempFile and the write', async () => {
+      // The OS temp reaper (and Windows cleanup utilities) delete the app temp dir while
+      // Cherry runs, and handing out the path is a separate IPC round-trip from writing
+      // it. A path into a directory that no longer exists fails the write with ENOENT —
+      // which is what turned a pasted clipboard image into a bare "file processing error".
+      const target = await fileStorage.createTempFile(event, 'image.png')
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+
+      await fileStorage.writeFile(event, target, 'pasted')
+
+      expect(fs.readFileSync(target, 'utf-8')).toBe('pasted')
+    })
+
+    it('leaves the temp dir alone for a write that lands somewhere else', async () => {
+      // `writeFile` is the general file-write IPC. Resolving the volatile temp key on
+      // every call would make each unrelated write re-create the temp dir — a synchronous
+      // mkdir in the main process for writes that have nothing to do with it.
+      const elsewhere = path.join(os.tmpdir(), `filestorage-elsewhere-${uniqueId()}.txt`)
+
+      try {
+        await fileStorage.writeFile(event, elsewhere, 'content')
+
+        expect(fs.readFileSync(elsewhere, 'utf-8')).toBe('content')
+        expect(fs.existsSync(tempRoot)).toBe(false)
+      } finally {
+        fs.rmSync(elsewhere, { force: true })
+      }
+    })
+
+    it('does not create missing parent directories for writes outside the temp dir', async () => {
+      // Only app.temp is known to vanish under a running app. Everywhere else a missing
+      // parent still surfaces as an error instead of a silently materialized tree.
+      const outside = path.join(os.tmpdir(), `filestorage-outside-${uniqueId()}`, 'note.md')
+
+      await expect(fileStorage.writeFile(event, outside, 'x')).rejects.toThrow(/ENOENT/)
     })
   })
 

@@ -58,6 +58,7 @@ Format: `/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/` (enforced by ESLint `data-sche
 | No suffix | Directory (default) | `feature.files.data` |
 
 **Critical:** Directory keys MUST NOT end with `file` — auto-ensure uses this to distinguish files from directories.
+Likewise, only OS-temp-root directories may end with `temp` — auto-ensure uses that suffix to mark them volatile (below).
 
 ## Auto-ensure
 
@@ -65,6 +66,15 @@ Format: `/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/` (enforced by ESLint `data-sche
 - **Directory key** → `mkdirSync(base, { recursive: true })`
 - **File key** (ends with `file`) → `mkdirSync(dirname(base))` (file itself is NOT created)
 - Failures are logged as warnings; the path is still returned
+
+### Volatile keys (`temp` suffix)
+
+`app.temp` and the feature temp dirs under it sit in the OS temp root, which the OS reaper
+and disk-cleanup utilities delete while the app is running. Caching their ensure would keep
+handing out paths inside a directory that no longer exists, so every consumer fails with
+ENOENT until restart. Keys ending in `temp` therefore **re-ensure on every access** instead
+of being cached (`isVolatilePath` in `pathRegistry.ts`), and their mkdir failures are logged
+once per key rather than once per lookup. Name any new OS-temp-root key with that suffix.
 
 ### NO_ENSURE List
 

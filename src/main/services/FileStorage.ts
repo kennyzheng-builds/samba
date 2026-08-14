@@ -18,7 +18,7 @@ import { loggerService } from '@logger'
 import { isWin } from '@main/core/platform'
 import { t } from '@main/i18n'
 import { assertOutsideManagedStorageMutation } from '@main/services/file'
-import { getFileType } from '@main/utils/file'
+import { getFileType, isSameOrInside } from '@main/utils/file'
 import {
   checkName,
   getFileType as getFileTypeByExt,
@@ -522,8 +522,12 @@ class FileStorage {
   }
 
   public createTempFile = async (_: Electron.IpcMainInvokeEvent, fileName: string): Promise<string> => {
+    const tempDir = this.tempDir
+    // `getPath`'s ensure is best-effort and swallows its error; handing back a path into a
+    // directory we know is unusable turns that into an unattributable ENOENT downstream.
+    await fs.promises.mkdir(tempDir, { recursive: true })
     // `fileName` is renderer-supplied; basename it so a value like `../../evil` can't escape tempDir.
-    return path.join(this.tempDir, `temp_file_${uuidv4()}_${path.basename(fileName)}`)
+    return path.join(tempDir, `temp_file_${uuidv4()}_${path.basename(fileName)}`)
   }
 
   public writeFile = async (
@@ -532,7 +536,16 @@ class FileStorage {
     data: Uint8Array | string
   ): Promise<void> => {
     await assertOutsideManagedStorageMutation(filePath)
-    await fs.promises.writeFile(filePath, data)
+    try {
+      await fs.promises.writeFile(filePath, data)
+    } catch (error) {
+      // `createTempFile` and this write are separate IPC calls, so the reaper can take the
+      // temp dir in between. Rebuild it and retry — only there; elsewhere a missing parent
+      // stays an error instead of silently materializing a tree.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !isSameOrInside(filePath, this.tempDir)) throw error
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.promises.writeFile(filePath, data)
+    }
   }
 
   public fileNameGuard = async (

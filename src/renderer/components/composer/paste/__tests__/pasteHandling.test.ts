@@ -1,3 +1,4 @@
+import { toast } from '@renderer/services/toast'
 import { COMPOSER_FILE_KIND, FILE_TYPE, type FileMetadata } from '@renderer/types/file'
 import type { ComposerAttachment } from '@renderer/utils/message/composerAttachment'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -166,6 +167,45 @@ describe('pasteHandling', () => {
       ext: '.png',
       type: FILE_TYPE.IMAGE
     })
+  })
+
+  it('surfaces why a pasted image could not be attached', async () => {
+    // A bare "file processing error" is the same toast whether the failure is transient
+    // or an unusable temp dir that no restart or reinstall will fix.
+    const clipboardImage = {
+      name: 'image.png',
+      type: 'image/png',
+      arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer)
+    } as unknown as File
+    vi.mocked(window.api.file.createTempFile).mockResolvedValue('/tmp/CherryStudio/temp_file_123_image.png')
+    vi.mocked(window.api.file.write).mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'file:write': Error: EACCES: permission denied, mkdir '/tmp/CherryStudio'"
+      )
+    )
+
+    const event = {
+      preventDefault: vi.fn(),
+      clipboardData: {
+        getData: () => '',
+        files: [clipboardImage]
+      }
+    } as unknown as ClipboardEvent
+
+    const handled = await pasteHandling.handlePaste(
+      event,
+      ['.png'],
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      (key) => key
+    )
+
+    expect(handled).toBe(true)
+    const [message] = vi.mocked(toast.error).mock.calls.at(-1) ?? []
+    expect(message).toContain('chat.input.file_error')
+    expect(message).toContain("EACCES: permission denied, mkdir '/tmp/CherryStudio'")
   })
 
   describe('handler registration and lifecycle', () => {

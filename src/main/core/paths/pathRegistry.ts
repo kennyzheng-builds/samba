@@ -269,3 +269,20 @@ const NO_ENSURE = [
 export function shouldAutoEnsure(key: PathKey): boolean {
   return !NO_ENSURE.some((entry) => (entry.endsWith('.') ? key.startsWith(entry) : key === entry))
 }
+
+/**
+ * Whether this key's directory can vanish while the app runs, so auto-ensure must
+ * re-run on every access instead of being cached once per process.
+ *
+ * `app.temp` and the feature temp dirs under it live in the OS temp root, which the
+ * OS reaper and disk-cleanup utilities delete out from under a running app. With a
+ * cached ensure, every later lookup hands out a path inside a directory that no
+ * longer exists and the caller fails with ENOENT until restart — `mkdtemp` in the
+ * OV OCR and diagnostic-bundle paths, and the write behind a pasted clipboard image.
+ *
+ * Keyed off the `temp` suffix, the same naming convention auto-ensure already uses to
+ * tell file keys from directory keys, so a new temp key inherits this automatically.
+ */
+export function isVolatilePath(key: PathKey): boolean {
+  return key.endsWith('temp')
+}

@@ -11,7 +11,13 @@ import {
   ServiceInitError,
   SHUTDOWN_TIMEOUT_MS
 } from '@main/core/lifecycle'
-import { buildPathRegistry, type PathKey, type PathMap, shouldAutoEnsure } from '@main/core/paths/pathRegistry'
+import {
+  buildPathRegistry,
+  isVolatilePath,
+  type PathKey,
+  type PathMap,
+  shouldAutoEnsure
+} from '@main/core/paths/pathRegistry'
 import { isDev, isLinux, isMac, isPortable, isWin } from '@main/core/platform'
 import { bootConfigService } from '@main/data/bootConfig'
 import { IpcChannel } from '@shared/IpcChannel'
@@ -61,6 +67,13 @@ export class Application {
    * allow test isolation.
    */
   private ensuredKeys = new Set<PathKey>()
+
+  /**
+   * Keys whose ensure has already been reported as failing. Volatile keys retry
+   * their mkdir on every lookup, so without this a temp dir that stays unwritable
+   * would emit one warning per file operation.
+   */
+  private ensureFailureLoggedKeys = new Set<PathKey>()
 
   private constructor() {
     this.container = ServiceContainer.getInstance()
@@ -752,23 +765,33 @@ export class Application {
     //     created — it remains the caller's responsibility.
     // Opt-out lives in `pathRegistry.shouldAutoEnsure` (data-driven, see
     // the NO_ENSURE list there). The result is cached in `ensuredKeys`
-    // so each key's directory is created at most once per process.
-    if (!this.ensuredKeys.has(key) && shouldAutoEnsure(key)) {
+    // so each key's directory is created at most once per process —
+    // except for volatile keys (`pathRegistry.isVolatilePath`), which the
+    // OS can delete mid-session and so must be re-ensured on every lookup.
+    const volatilePath = isVolatilePath(key)
+    if ((volatilePath || !this.ensuredKeys.has(key)) && shouldAutoEnsure(key)) {
       const dirToEnsure = key.endsWith('file') ? path.dirname(base) : base
       try {
         fs.mkdirSync(dirToEnsure, { recursive: true })
+        this.ensureFailureLoggedKeys.delete(key)
       } catch (err) {
         // Don't block path resolution if mkdir fails (read-only FS,
         // missing permissions, etc.). Caller may still need the path
-        // for error reporting or read-only checks.
-        logger.warn(
-          `application.getPath: mkdir failed for key '${key}' at '${dirToEnsure}'. ` +
-            `Returning path anyway. Error: ${(err as Error).message}`
-        )
+        // for error reporting or read-only checks. Log once per key: a
+        // volatile key retries every lookup, so a persistently unwritable
+        // temp dir would otherwise emit one line per file operation.
+        if (!this.ensureFailureLoggedKeys.has(key)) {
+          this.ensureFailureLoggedKeys.add(key)
+          logger.warn(
+            `application.getPath: mkdir failed for key '${key}' at '${dirToEnsure}'. ` +
+              `Returning path anyway. Error: ${(err as Error).message}`
+          )
+        }
       }
       // Cache regardless of success — retrying on every call would be
       // a perf trap. Failed-once is treated the same as succeeded-once.
-      this.ensuredKeys.add(key)
+      // Volatile keys opt out: their whole point is to retry.
+      if (!volatilePath) this.ensuredKeys.add(key)
     }
 
     if (filename === undefined) return base
@@ -811,6 +834,7 @@ export class Application {
     // would silently skip mkdir in the next test, breaking call-count
     // assertions and hiding regressions.
     this.ensuredKeys.clear()
+    this.ensureFailureLoggedKeys.clear()
   }
 }
 

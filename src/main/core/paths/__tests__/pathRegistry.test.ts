@@ -13,7 +13,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { buildPathRegistry, shouldAutoEnsure } from '../pathRegistry'
+import { buildPathRegistry, isVolatilePath, type PathKey, shouldAutoEnsure } from '../pathRegistry'
 
 // Pure data-rule tests for `shouldAutoEnsure`. Decoupled from
 // Application.getPath so that a regression in the auto-ensure rules can be
@@ -310,5 +310,30 @@ describe('pathRegistry.shouldAutoEnsure', () => {
     it('returns true for app.temp', () => {
       expect(shouldAutoEnsure('app.temp')).toBe(true)
     })
+  })
+})
+
+describe('pathRegistry.isVolatilePath', () => {
+  it('marks exactly the OS-temp-root directories volatile', () => {
+    // The `temp` suffix and the physical layout must agree in both directions: a
+    // key under app.temp without the suffix is ensured once and then hands out
+    // paths into a directory the OS reaper has since deleted, while a durable
+    // directory carrying the suffix pays a needless mkdir on every lookup.
+    const registry = buildPathRegistry()
+    const appTemp = registry['app.temp']
+    // `sys.temp` is the OS temp root itself: NO_ENSURE already keeps auto-ensure
+    // away from it, so whether it reads as volatile never reaches a mkdir.
+    const keys = (Object.keys(registry) as PathKey[]).filter((key) => key !== 'sys.temp')
+    const inOsTempRoot = (key: PathKey) => key === 'app.temp' || Boolean(registry[key]?.startsWith(appTemp))
+
+    const osTempRootKeys = keys.filter(inOsTempRoot).sort()
+    expect(osTempRootKeys.length).toBeGreaterThan(1)
+    expect(keys.filter(isVolatilePath).sort()).toEqual(osTempRootKeys)
+  })
+
+  it('leaves durable Cherry-owned directories on the cached single ensure', () => {
+    expect(isVolatilePath('feature.files.data')).toBe(false)
+    expect(isVolatilePath('app.userdata')).toBe(false)
+    expect(isVolatilePath('cherry.bin')).toBe(false)
   })
 })

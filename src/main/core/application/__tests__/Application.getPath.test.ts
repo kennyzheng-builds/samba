@@ -39,6 +39,8 @@ vi.mock('@main/core/paths/pathRegistry', async () => {
         'feature.notes.data': '/mock/userData/Data/Notes',
         'feature.agents.system_workspaces': '/mock/userData/Data/Agents/system',
         'cherry.bin': '/mock/home/.cherrystudio/bin',
+        // Volatile (OS temp root) — re-ensured on every access
+        'app.temp': '/mock/temp/CherryStudio',
         // Cherry-owned files (auto-ensure dirname only)
         'feature.copilot.token_file': '/mock/home/.cherrystudio/config/.copilot_token',
         'app.database.file': '/mock/userData/Data/cherrystudio.sqlite',
@@ -59,6 +61,7 @@ vi.mock('@main/core/paths/pathRegistry', async () => {
 // exercises the REAL Application class.
 vi.unmock('@application')
 
+import { loggerService } from '@logger'
 import { Application } from '@main/core/application/Application'
 import { buildPathRegistry } from '@main/core/paths/pathRegistry'
 
@@ -214,6 +217,62 @@ describe('Application.getPath', () => {
       expect(fs.mkdirSync).toHaveBeenCalledTimes(2)
       expect(fs.mkdirSync).toHaveBeenNthCalledWith(1, '/mock/userData/Data/Notes', { recursive: true })
       expect(fs.mkdirSync).toHaveBeenNthCalledWith(2, '/mock/userData/Data/Files', { recursive: true })
+    })
+
+    it('re-mkdirs a volatile temp key on every access', () => {
+      // The OS reaper and disk-cleanup tools delete the app temp dir while the app
+      // runs. Caching its ensure left every later consumer — mkdtemp in the OV OCR and
+      // diagnostic-bundle paths, the write behind a pasted image — failing with ENOENT
+      // until the user restarted.
+      app.getPath('app.temp')
+      app.getPath('app.temp')
+
+      expect(fs.mkdirSync).toHaveBeenCalledTimes(2)
+      expect(fs.mkdirSync).toHaveBeenLastCalledWith('/mock/temp/CherryStudio', { recursive: true })
+    })
+
+    it('retries a volatile temp key after a failed mkdir', () => {
+      vi.mocked(fs.mkdirSync).mockImplementationOnce(() => {
+        throw new Error('EACCES: temporarily unwritable')
+      })
+
+      expect(app.getPath('app.temp')).toBe('/mock/temp/CherryStudio')
+      // A transient failure must not permanently disable the temp dir the way the
+      // failed-once-is-cached rule does for durable keys.
+      app.getPath('app.temp')
+      expect(fs.mkdirSync).toHaveBeenCalledTimes(2)
+    })
+
+    it('warns once while a volatile temp key stays unwritable', () => {
+      vi.mocked(loggerService.warn).mockClear()
+      for (let i = 0; i < 5; i++) {
+        vi.mocked(fs.mkdirSync).mockImplementationOnce(() => {
+          throw new Error('EACCES: read-only filesystem')
+        })
+      }
+
+      for (let i = 0; i < 5; i++) app.getPath('app.temp')
+
+      // Retrying every lookup must not turn an unwritable temp dir into one log line
+      // per file operation.
+      expect(fs.mkdirSync).toHaveBeenCalledTimes(5)
+      expect(loggerService.warn).toHaveBeenCalledTimes(1)
+    })
+
+    it('warns again after a volatile temp key recovers and fails once more', () => {
+      vi.mocked(loggerService.warn).mockClear()
+      vi.mocked(fs.mkdirSync).mockImplementationOnce(() => {
+        throw new Error('EACCES: read-only filesystem')
+      })
+      app.getPath('app.temp')
+      app.getPath('app.temp') // recovers — clears the reported-failure latch
+      vi.mocked(fs.mkdirSync).mockImplementationOnce(() => {
+        throw new Error('EACCES: read-only filesystem again')
+      })
+      app.getPath('app.temp')
+
+      // Throttling must not swallow a *new* outage after the dir came back.
+      expect(loggerService.warn).toHaveBeenCalledTimes(2)
     })
 
     it('clears the auto-ensure cache when __setPathMapForTesting is called', () => {
