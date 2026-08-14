@@ -91,6 +91,21 @@ describe('CodeBlockView', () => {
     expect(screen.queryByRole('textbox', { name: 'Code editor' })).not.toBeInTheDocument()
   })
 
+  it.each([
+    { expectedWrapped: false, name: 'follows the preference when the surface has no opinion', wrappable: undefined },
+    { expectedWrapped: true, name: 'wraps when the surface overrides the preference', wrappable: true }
+  ])('$name', ({ expectedWrapped, wrappable }) => {
+    MockUsePreferenceUtils.setPreferenceValue('chat.code.wrappable', false)
+
+    render(
+      <CodeBlockView language="javascript" editable={false} wrappable={wrappable}>
+        const value = 1
+      </CodeBlockView>
+    )
+
+    expect(mocks.CodeViewer).toHaveBeenLastCalledWith(expect.objectContaining({ wrapped: expectedWrapped }), undefined)
+  })
+
   it('caps display-only code and suppresses its toolbar', () => {
     render(
       <CodeBlockView language="html" editable={false} isStreaming maxHeight={350} showToolbar={false}>

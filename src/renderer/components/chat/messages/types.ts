@@ -228,6 +228,8 @@ export interface MessageRenderConfig {
   fontSize: number
   renderInputMessageAsMarkdown: boolean
   codeFancyBlock: boolean
+  /** Overrides the `chat.code.wrappable` preference; omit to follow it. */
+  codeWrappable?: boolean
   thoughtAutoCollapse: boolean
   collapseCompletedToolHistory: boolean
   mathEnableSingleDollar: boolean

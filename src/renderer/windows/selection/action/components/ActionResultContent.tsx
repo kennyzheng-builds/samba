@@ -4,7 +4,7 @@ import { useMessagePlatformActions } from '@renderer/components/chat/messages/ho
 import { MessageContentProvider } from '@renderer/components/chat/messages/MessageContentProvider'
 import type { MessageListItem } from '@renderer/components/chat/messages/types'
 import type { CherryMessagePart } from '@shared/data/types/message'
-import type { FC } from 'react'
+import { type FC, useMemo } from 'react'
 
 interface Props {
   message: MessageListItem
@@ -21,11 +21,14 @@ interface Props {
 const ActionResultContent: FC<Props> = ({ message, partsByMessageId }) => {
   const { renderConfig } = useMessageListRenderConfig()
   const platformActions = useMessagePlatformActions()
+  // The action window is a narrow floating popup with no horizontal scroll and no
+  // settings entry, so unwrapped code would be permanently cut off.
+  const actionRenderConfig = useMemo(() => ({ ...renderConfig, codeWrappable: true }), [renderConfig])
   return (
     <MessageContentProvider
       messages={[message]}
       partsByMessageId={partsByMessageId}
-      renderConfig={renderConfig}
+      renderConfig={actionRenderConfig}
       actions={platformActions}>
       <MessageContent key={message.id} message={message} />
     </MessageContentProvider>

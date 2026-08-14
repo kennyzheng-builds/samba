@@ -57,7 +57,7 @@ const CodeBlock: React.FC<Props> = ({
         ? 'svg'
         : detectedLanguage
   }, [text, detectedLanguage])
-  const { codeFancyBlock } = useMessageRenderConfig()
+  const { codeFancyBlock, codeWrappable } = useMessageRenderConfig()
   const isIncomplete = useIsCodeFenceIncomplete()
 
   // 代码块 id
@@ -117,7 +117,8 @@ const CodeBlock: React.FC<Props> = ({
                 editable={false}
                 isStreaming={isHtmlArtifactStreaming}
                 maxHeight={MAX_COLLAPSED_CODE_HEIGHT}
-                showToolbar={false}>
+                showToolbar={false}
+                wrappable={codeWrappable}>
                 {text}
               </CodeBlockView>
             )
@@ -151,7 +152,8 @@ const CodeBlock: React.FC<Props> = ({
         language={language}
         onSave={handleSave}
         editable={canSaveCodeBlock}
-        isStreaming={isStreaming || isIncomplete}>
+        isStreaming={isStreaming || isIncomplete}
+        wrappable={codeWrappable}>
         {text}
       </CodeBlockView>
     )

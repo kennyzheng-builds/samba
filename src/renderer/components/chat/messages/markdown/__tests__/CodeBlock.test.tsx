@@ -99,10 +99,32 @@ describe('CodeBlock', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.isWin = false
+    mocks.renderConfig = { codeFancyBlock: true }
     mocks.messageListActions = { navigateToRoute: mocks.navigateToRoute, saveCodeBlock: mocks.saveCodeBlock }
     // Default mock return values
     mocks.getCodeBlockId.mockReturnValue('test-code-block-id')
     mocks.isCodeFenceIncomplete = false
+  })
+
+  describe('code wrapping', () => {
+    it.each([
+      {
+        expected: undefined,
+        name: 'stays unset when the surface has no opinion',
+        renderConfig: { codeFancyBlock: true }
+      },
+      {
+        expected: true,
+        name: 'forwards the override a narrow surface set',
+        renderConfig: { codeFancyBlock: true, codeWrappable: true }
+      }
+    ])('$name', ({ expected, renderConfig }) => {
+      mocks.renderConfig = renderConfig
+
+      render(<CodeBlock {...defaultProps} />)
+
+      expect(mocks.CodeBlockView).toHaveBeenLastCalledWith(expect.objectContaining({ wrappable: expected }), undefined)
+    })
   })
 
   describe('rendering', () => {

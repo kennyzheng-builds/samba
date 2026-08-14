@@ -54,6 +54,8 @@ interface Props {
   isStreaming?: boolean
   showToolbar?: boolean
   maxHeight?: string | number
+  /** Overrides the `chat.code.wrappable` preference, for surfaces too narrow to scroll horizontally. */
+  wrappable?: boolean
 }
 
 /**
@@ -74,13 +76,22 @@ interface Props {
  * - core 工具
  */
 export const CodeBlockView: React.FC<Props> = memo((props) => {
-  const { children, language, onSave, editable = true, isStreaming = false, showToolbar = true, maxHeight } = props
+  const {
+    children,
+    language,
+    onSave,
+    editable = true,
+    isStreaming = false,
+    showToolbar = true,
+    maxHeight,
+    wrappable
+  } = props
   const { t } = useTranslation()
 
   const [codeExecutionEnabled] = usePreference('chat.code.execution.enabled')
   const [codeExecutionTimeoutMinutes] = usePreference('chat.code.execution.timeout_minutes')
   const [codeCollapsible] = usePreference('chat.code.collapsible')
-  const [codeWrappable] = usePreference('chat.code.wrappable')
+  const [codeWrappablePreference] = usePreference('chat.code.wrappable')
   const [codeImageTools] = usePreference('chat.code.image_tools')
   const [fontSize] = usePreference('chat.message.font_size')
   const [codeShowLineNumbers] = usePreference('chat.code.show_line_numbers')
@@ -93,6 +104,8 @@ export const CodeBlockView: React.FC<Props> = memo((props) => {
     themeLight: 'chat.code.editor.theme_light',
     themeDark: 'chat.code.editor.theme_dark'
   })
+
+  const codeWrappable = wrappable ?? codeWrappablePreference
 
   const { activeCmTheme } = useCodeStyle()
   const canEdit = codeEditor.enabled && editable

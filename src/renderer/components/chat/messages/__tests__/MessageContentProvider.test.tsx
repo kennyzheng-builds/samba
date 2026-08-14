@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import MessageContent from '../frame/MessageContent'
 import { MessageContentProvider } from '../MessageContentProvider'
-import { useMessageListActions } from '../MessageListProvider'
+import { useMessageListActions, useMessageRenderConfig } from '../MessageListProvider'
 import type { MessageListItem } from '../types'
 
 describe('MessageContentProvider', () => {
@@ -27,6 +27,21 @@ describe('MessageContentProvider', () => {
     )
 
     expect(screen.getByText('standalone content')).toBeInTheDocument()
+  })
+
+  it('leaves a render override the surface did not set undefined instead of defaulting it off', () => {
+    const Probe = () => <span>{`wrappable:${String(useMessageRenderConfig().codeWrappable)}`}</span>
+
+    render(
+      <MessageContentProvider
+        messages={[message]}
+        partsByMessageId={partsByMessageId}
+        renderConfig={{ narrowMode: false, showMessageOutline: false }}>
+        <Probe />
+      </MessageContentProvider>
+    )
+
+    expect(screen.getByText('wrappable:undefined')).toBeInTheDocument()
   })
 
   it('does not inject platform actions by default', () => {
