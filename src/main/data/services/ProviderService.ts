@@ -15,7 +15,7 @@ import { type SqliteErrorHandlers, withSqliteErrors } from '@data/db/sqliteError
 import type { DbType } from '@data/db/types'
 import { getDataService, registerDataService } from '@data/services/dataServiceRegistry'
 import { pinService } from '@data/services/PinService'
-import { buildApiFeaturesBaseline, diffApiFeatures } from '@data/services/ProviderRegistryService'
+import { buildApiFeaturesBaseline, diffApiFeatures, rebasePresetBaseUrls } from '@data/services/ProviderRegistryService'
 import { applyMoves, insertManyWithOrderKey, insertWithOrderKey } from '@data/services/utils/orderKey'
 import {
   clearSingleFileRefTx,
@@ -168,6 +168,7 @@ function projectEndpointConfigOverrides(
   configs: Partial<Record<EndpointType, EndpointConfigOverride>> | null | undefined,
   providerId: string,
   presetProviderId: string | null,
+  primaryEndpoint: EndpointType | null | undefined,
   storedConfigs?: Partial<Record<EndpointType, StoredEndpointConfigOverride>> | null
 ): Partial<Record<EndpointType, StoredEndpointConfigOverride>> | null {
   if (!configs || Object.keys(configs).length === 0) return null
@@ -180,6 +181,13 @@ function projectEndpointConfigOverrides(
     ['endpointConfigs'],
     presetProviderId
   ).endpointConfigs
+  // That snapshot also carries the sibling hosts the read path rebased off the
+  // stored primary, so those count as baseline too — otherwise every host edit
+  // would freeze the previous host onto the siblings. Only for a full snapshot
+  // (the primary is present); a partial PATCH states a genuine per-endpoint
+  // override. The primary itself is user-owned either way.
+  const isSnapshotEcho = primaryEndpoint != null && configs[primaryEndpoint] !== undefined
+  const rebasedConfigs = isSnapshotEcho ? rebasePresetBaseUrls(presetConfigs, storedConfigs, primaryEndpoint) : null
 
   const result: Partial<Record<EndpointType, StoredEndpointConfigOverride>> = {}
   for (const [key, config] of Object.entries(configs)) {
@@ -187,7 +195,10 @@ function projectEndpointConfigOverrides(
     const ep = key as EndpointType
     const presetConfig = presetConfigs?.[ep]
     const override: StoredEndpointConfigOverride = {}
-    if (config.baseUrl !== undefined && config.baseUrl !== presetConfig?.baseUrl) override.baseUrl = config.baseUrl
+    const isBaselineBaseUrl =
+      config.baseUrl === presetConfig?.baseUrl ||
+      (ep !== primaryEndpoint && config.baseUrl === rebasedConfigs?.[ep]?.baseUrl)
+    if (config.baseUrl !== undefined && !isBaselineBaseUrl) override.baseUrl = config.baseUrl
     if (presetProviderId === null && storedConfigs?.[ep]?.adapterFamily !== undefined) {
       override.adapterFamily = storedConfigs[ep].adapterFamily
     }
@@ -206,6 +217,8 @@ function projectEndpointConfigOverrides(
 function rowToRuntimeProvider(row: UserProviderRow): Provider {
   const providerRegistryService = getDataService('ProviderRegistryService')
   const presetMetadata = providerRegistryService.getProviderDisplayMetadata(row.providerId, row.presetProviderId)
+
+  const defaultChatEndpoint = row.defaultChatEndpoint ?? presetMetadata.defaultChatEndpoint
 
   // Process API keys (strip actual key values for security)
   // oxlint-disable-next-line no-unused-vars
@@ -252,9 +265,13 @@ function rowToRuntimeProvider(row: UserProviderRow): Provider {
     // the row contributes only the user-owned baseUrl override. Legacy
     // registry-only fields such as `reasoningFormatType` are stripped first.
     endpointConfigs:
-      providerRegistryService.mergeEndpointConfigs(row.endpointConfigs, row.providerId, row.presetProviderId) ??
-      undefined,
-    defaultChatEndpoint: row.defaultChatEndpoint ?? presetMetadata.defaultChatEndpoint,
+      providerRegistryService.mergeEndpointConfigs(
+        row.endpointConfigs,
+        row.providerId,
+        row.presetProviderId,
+        defaultChatEndpoint
+      ) ?? undefined,
+    defaultChatEndpoint,
     modelListSource: presetMetadata.modelListSource,
     authMethods: presetMetadata.authMethods,
     authOptional: presetMetadata.authOptional,
@@ -332,14 +349,15 @@ class ProviderService {
   create(dto: CreateProviderDto): Provider {
     assertManagedCherryAiProviderMutationAllowed(dto.providerId, `create provider ${dto.providerId}`)
 
-    const endpointConfigs = projectEndpointConfigOverrides(
-      dto.endpointConfigs,
-      dto.providerId,
-      dto.presetProviderId ?? null
-    )
     const presetMetadata = getDataService('ProviderRegistryService').getProviderDisplayMetadata(
       dto.providerId,
       dto.presetProviderId ?? null
+    )
+    const endpointConfigs = projectEndpointConfigOverrides(
+      dto.endpointConfigs,
+      dto.providerId,
+      dto.presetProviderId ?? null,
+      dto.defaultChatEndpoint ?? presetMetadata.defaultChatEndpoint
     )
     const apiFeatures = diffApiFeatures(dto.apiFeatures, buildApiFeaturesBaseline(presetMetadata.apiFeatures))
     const defaultChatEndpoint =
@@ -401,6 +419,7 @@ class ProviderService {
           providerSettings: userProviderTable.providerSettings,
           apiFeatures: userProviderTable.apiFeatures,
           endpointConfigs: userProviderTable.endpointConfigs,
+          defaultChatEndpoint: userProviderTable.defaultChatEndpoint,
           isEnabled: userProviderTable.isEnabled,
           presetProviderId: userProviderTable.presetProviderId
         })
@@ -421,6 +440,10 @@ class ProviderService {
       if (logoCols) {
         updates.logoKey = logoCols.logoKey
       }
+      const presetMetadata =
+        dto.defaultChatEndpoint !== undefined || dto.apiFeatures !== undefined || dto.endpointConfigs !== undefined
+          ? getDataService('ProviderRegistryService').getProviderDisplayMetadata(providerId, current.presetProviderId)
+          : undefined
       // PATCH replaces endpointConfigs wholesale; only the user-owned override
       // shape is persisted — registry-owned fields resolve at read time.
       if (dto.endpointConfigs !== undefined) {
@@ -428,14 +451,11 @@ class ProviderService {
           dto.endpointConfigs,
           providerId,
           current.presetProviderId,
+          current.defaultChatEndpoint ?? presetMetadata?.defaultChatEndpoint,
           current.endpointConfigs
         )
       }
       if (dto.authConfig !== undefined) updates.authConfig = dto.authConfig
-      const presetMetadata =
-        dto.defaultChatEndpoint !== undefined || dto.apiFeatures !== undefined
-          ? getDataService('ProviderRegistryService').getProviderDisplayMetadata(providerId, current.presetProviderId)
-          : undefined
       // A renderer may echo the merged runtime value while editing an unrelated
       // field. Drop a baseline-equal endpoint instead of freezing that registry
       // default into the row.

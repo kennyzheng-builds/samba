@@ -496,6 +496,58 @@ describe('ProviderModelMigrator', () => {
       expect(runtime.defaultChatEndpoint).toBe(ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS)
     })
 
+    it('keeps a migrated gateway relay on the user host for every wire endpoint (#18597)', async () => {
+      // A multi-backend gateway: one origin, a different path per endpoint. v1
+      // held a single apiHost and derived them all from it.
+      registryFixtures.providers = [
+        {
+          id: 'aihubmix',
+          name: 'AiHubMix',
+          endpointConfigs: {
+            'openai-chat-completions': { baseUrl: 'https://aihubmix.com/v1' },
+            'anthropic-messages': { baseUrl: 'https://aihubmix.com' },
+            'google-generate-content': { baseUrl: 'https://aihubmix.com/gemini/v1beta' }
+          },
+          defaultChatEndpoint: 'openai-chat-completions'
+        }
+      ]
+
+      const migrationContext = createContext(dbh.db, {
+        llm: {
+          providers: [
+            {
+              id: 'aihubmix',
+              name: 'AiHubMix',
+              type: 'openai',
+              enabled: true,
+              isSystem: true,
+              apiHost: 'https://relay.example.com/v1',
+              models: [{ id: 'claude-3-5-sonnet-20241022' }, { id: 'gemini-2.0-flash' }]
+            }
+          ]
+        }
+      })
+      await migrator.prepare(migrationContext)
+      expect((await migrator.execute(migrationContext)).success).toBe(true)
+
+      // v1's apiHost lands on the one endpoint its `type` maps to...
+      const [providerRow] = await dbh.db
+        .select()
+        .from(userProviderTable)
+        .where(eq(userProviderTable.providerId, 'aihubmix'))
+      expect(providerRow.endpointConfigs).toEqual({
+        [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://relay.example.com/v1' }
+      })
+
+      // ...and the endpoints the gateway routes claude / gemini models to must
+      // still resolve to the relay rather than aihubmix.com.
+      const runtime = providerService.getByProviderId('aihubmix')
+      expect(runtime.endpointConfigs?.[ENDPOINT_TYPE.ANTHROPIC_MESSAGES]?.baseUrl).toBe('https://relay.example.com')
+      expect(runtime.endpointConfigs?.[ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]?.baseUrl).toBe(
+        'https://relay.example.com/gemini/v1beta'
+      )
+    })
+
     it('stores only a changed API feature from a post-migration v1 provider snapshot', async () => {
       registryFixtures.providers = [
         {

@@ -122,6 +122,67 @@ export function diffApiFeatures(
   return Object.keys(delta).length > 0 ? (delta as ApiFeatures) : null
 }
 
+/** Longest common prefix of two URLs, cut back to a path-segment boundary. */
+function commonBase(a: string, b: string): string {
+  let index = 0
+  while (index < a.length && index < b.length && a[index] === b[index]) index++
+  const prefix = a.slice(0, index)
+  const lastSlash = prefix.lastIndexOf('/')
+  // Never cut inside the scheme's own "//".
+  return lastSlash > prefix.indexOf('://') + 2 ? prefix.slice(0, lastSlash) : prefix
+}
+
+/**
+ * Re-express `presetTarget` against the host the user configured, keeping the
+ * preset's per-endpoint path offset. `undefined` when the user's URL does not
+ * carry the anchor's path suffix, i.e. the offset cannot be reapplied safely.
+ */
+function rebaseBaseUrl(presetAnchor: string, presetTarget: string, userAnchor: string): string | undefined {
+  const base = commonBase(presetAnchor, presetTarget)
+  const anchorSuffix = presetAnchor.slice(base.length)
+  if (!userAnchor.endsWith(anchorSuffix)) return undefined
+  return userAnchor.slice(0, userAnchor.length - anchorSuffix.length) + presetTarget.slice(base.length)
+}
+
+/**
+ * Re-derive a preset's per-endpoint base URLs from the host the user configured
+ * on `primaryEndpoint`.
+ *
+ * A provider has ONE host. v1 derived every backend URL of a multi-endpoint
+ * gateway from the single configured `apiHost`; v2 stores a per-endpoint
+ * override and the settings UI only ever writes the primary one (a migrated row
+ * likewise gets exactly one, keyed off the legacy `type`). Letting the remaining
+ * endpoints inherit the preset verbatim points them at the vendor's official
+ * host, so a relayed AiHubMix sends its claude/gemini models to aihubmix.com
+ * instead of the relay (#18597).
+ *
+ * Only the primary host anchors the rebase — an override on a secondary
+ * endpoint is a deliberate per-endpoint choice and must not propagate.
+ * Endpoints whose path offset cannot be reapplied keep the preset URL.
+ */
+export function rebasePresetBaseUrls<T extends { baseUrl?: string }>(
+  presetConfigs: Partial<Record<EndpointType, T>> | null | undefined,
+  overrides: Partial<Record<EndpointType, { baseUrl?: string }>> | null | undefined,
+  primaryEndpoint: EndpointType | null | undefined
+): Partial<Record<EndpointType, T>> | null | undefined {
+  if (!presetConfigs || !overrides || !primaryEndpoint) return presetConfigs
+
+  const userUrl = overrides[primaryEndpoint]?.baseUrl
+  // The preset may not declare the endpoint the row stores its host on at all
+  // (a v1 `openai` relay lands on openai-chat-completions, the preset declares
+  // only openai-responses) — its own primary URL is then the reference.
+  const presetUrl =
+    presetConfigs[primaryEndpoint]?.baseUrl ?? Object.values(presetConfigs).find((config) => config?.baseUrl)?.baseUrl
+  if (!userUrl || !presetUrl || userUrl === presetUrl) return presetConfigs
+
+  const rebased: Partial<Record<EndpointType, T>> = {}
+  for (const [key, config] of Object.entries(presetConfigs) as Array<[EndpointType, T]>) {
+    const baseUrl = config.baseUrl && rebaseBaseUrl(presetUrl, config.baseUrl, userUrl)
+    rebased[key] = baseUrl ? { ...config, baseUrl } : config
+  }
+  return rebased
+}
+
 export interface ListProviderRegistryModelsOptions {
   providerId?: string
   presetProviderId?: string | null
@@ -794,17 +855,24 @@ class ProviderRegistryService {
   mergeEndpointConfigs(
     rowConfigs: Partial<Record<EndpointType, StoredEndpointConfigOverride>> | null | undefined,
     providerId: string,
-    presetProviderId?: string | null
+    presetProviderId?: string | null,
+    primaryEndpoint?: EndpointType | null
   ): Partial<Record<EndpointType, EndpointConfig>> | null {
     try {
       // lookupPersistedPreset=false — called from rowToRuntimeProvider; a DB
       // read-back here would recurse (same guard as getProviderDisplayMetadata).
       const preset = this.resolveProviderPreset(providerId, presetProviderId, false)
-      const presetConfigs = preset
-        ? (buildPersistedEndpointConfigs(preset.endpointConfigs) as Partial<
-            Record<EndpointType, EndpointConfig>
-          > | null)
-        : null
+      // The host stored on the primary endpoint is the provider's host for every
+      // endpoint — see `rebasePresetBaseUrls` (#18597).
+      const presetConfigs = rebasePresetBaseUrls(
+        preset
+          ? (buildPersistedEndpointConfigs(preset.endpointConfigs) as Partial<
+              Record<EndpointType, EndpointConfig>
+            > | null)
+          : null,
+        rowConfigs,
+        primaryEndpoint
+      )
 
       if (!rowConfigs && !presetConfigs) return null
 

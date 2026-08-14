@@ -34,6 +34,16 @@ vi.mock('@cherrystudio/provider-registry/node', () => {
           reportedCostCurrency: 'USD'
         },
         {
+          // AiHubMix-shaped multi-backend gateway: one origin, a path per endpoint.
+          id: 'gateway',
+          endpointConfigs: {
+            'openai-chat-completions': { adapterFamily: 'aihubmix', baseUrl: 'https://gateway.example/v1' },
+            'anthropic-messages': { adapterFamily: 'aihubmix', baseUrl: 'https://gateway.example' },
+            'google-generate-content': { adapterFamily: 'aihubmix', baseUrl: 'https://gateway.example/gemini/v1beta' }
+          },
+          defaultChatEndpoint: 'openai-chat-completions'
+        },
+        {
           id: 'my-relay',
           description: 'Future registry provider',
           endpointConfigs: {
@@ -253,6 +263,60 @@ describe('ProviderService read-time registry merge (#17096)', () => {
     const runtime = providerService.getByProviderId('cherryin')
     expect(runtime.endpointConfigs?.[ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]?.baseUrl).toBe('https://open.cherryin.net')
     expect(runtime.endpointConfigs?.[ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]?.baseUrl).toBe('https://proxy.corp.example')
+  })
+
+  it('routes every endpoint of a relayed gateway to the relay, not the vendor (#18597)', async () => {
+    // Post-migration shape: the v1 apiHost lands on exactly one endpoint, keyed
+    // off the legacy `type`. The rest used to inherit the vendor's own hosts.
+    await dbh.db.insert(userProviderTable).values({
+      providerId: 'gateway',
+      presetProviderId: 'gateway',
+      name: 'Relayed Gateway',
+      endpointConfigs: {
+        [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://relay.example.com/v1' }
+      },
+      orderKey: 'a0'
+    })
+
+    const configs = providerService.getByProviderId('gateway').endpointConfigs
+
+    expect(configs?.[ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]?.baseUrl).toBe('https://relay.example.com/v1')
+    expect(configs?.[ENDPOINT_TYPE.ANTHROPIC_MESSAGES]?.baseUrl).toBe('https://relay.example.com')
+    expect(configs?.[ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]?.baseUrl).toBe('https://relay.example.com/gemini/v1beta')
+  })
+
+  it('moves the rebased sibling hosts along when the relay host is edited (#18597)', async () => {
+    await dbh.db.insert(userProviderTable).values({
+      providerId: 'gateway',
+      presetProviderId: 'gateway',
+      name: 'Relayed Gateway',
+      endpointConfigs: {
+        [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://relay.example.com/v1' }
+      },
+      orderKey: 'a0'
+    })
+
+    // The settings drawer echoes the merged snapshot with only the host retyped.
+    const shown = providerService.getByProviderId('gateway').endpointConfigs
+    providerService.update('gateway', {
+      endpointConfigs: {
+        [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://other-relay.example.com/v1' },
+        [ENDPOINT_TYPE.ANTHROPIC_MESSAGES]: { baseUrl: shown?.[ENDPOINT_TYPE.ANTHROPIC_MESSAGES]?.baseUrl },
+        [ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]: { baseUrl: shown?.[ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]?.baseUrl }
+      }
+    })
+
+    // The echo must not freeze the previous relay onto the siblings.
+    const [row] = await dbh.db.select().from(userProviderTable).where(eq(userProviderTable.providerId, 'gateway'))
+    expect(row.endpointConfigs).toEqual({
+      [ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]: { baseUrl: 'https://other-relay.example.com/v1' }
+    })
+
+    const configs = providerService.getByProviderId('gateway').endpointConfigs
+    expect(configs?.[ENDPOINT_TYPE.ANTHROPIC_MESSAGES]?.baseUrl).toBe('https://other-relay.example.com')
+    expect(configs?.[ENDPOINT_TYPE.GOOGLE_GENERATE_CONTENT]?.baseUrl).toBe(
+      'https://other-relay.example.com/gemini/v1beta'
+    )
   })
 
   it('strips legacy registry-only fields before merging', async () => {
