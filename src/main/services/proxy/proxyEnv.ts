@@ -48,6 +48,31 @@ export const getProxyEnvironment = (env: NodeJS.ProcessEnv = process.env): Recor
   return proxyEnv
 }
 
+const PROXY_URL_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const
+
+/** Chromium bypasses loopback on its own; the Node stack has no such default, so spell it out. */
+const LOOPBACK_BYPASS_RULES = ['localhost', '127.0.0.1', '::1'] as const
+
+/**
+ * Resolve the proxy the user exported in their environment, or `null` when the environment
+ * defines none. `system` mode falls back to this when the OS proxy cannot be read, so that
+ * in-process traffic uses the same proxy Cherry already forwards to spawned agent runtimes.
+ */
+export const resolveEnvironmentProxyConfig = (
+  env: NodeJS.ProcessEnv = process.env
+): { proxyRules: string; proxyBypassRules: string } | null => {
+  const proxyRules = PROXY_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => value)
+  if (!proxyRules) {
+    return null
+  }
+
+  const bypassRules = normalizeProxyBypassRules(env.NO_PROXY || env.no_proxy)
+  return {
+    proxyRules,
+    proxyBypassRules: [...new Set([...bypassRules, ...LOOPBACK_BYPASS_RULES])].join(',')
+  }
+}
+
 export const getProxyProtocol = (proxyRules?: string): string | null => {
   if (!proxyRules) {
     return null

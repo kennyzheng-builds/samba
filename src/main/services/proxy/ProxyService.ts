@@ -9,6 +9,7 @@ import { app, session } from 'electron'
 import { getSystemProxy } from 'os-proxy-config'
 
 import { NodeProxyController } from './NodeProxyController'
+import { getProxyEnvironment, resolveEnvironmentProxyConfig } from './proxyEnv'
 import type { ProxyRoutingSnapshot } from './proxyRouting'
 
 const logger = loggerService.withContext('ProxyService')
@@ -57,6 +58,8 @@ export class ProxyService extends BaseService {
   private systemProxyInterval: Disposable | null = null
   private appliedKey: string | null = null
   private nodeProxyController: NodeProxyController | null = null
+  /** Snapshot taken before NodeProxyController starts rewriting `process.env` on every apply. */
+  private readonly inheritedProxyEnvironment = getProxyEnvironment(process.env)
 
   // Latest-wins reconciler: rapid proxy-preference toggles (or system-proxy changes) collapse
   // into a single re-read + re-apply — single-flight and level-triggered, so a change landing
@@ -125,6 +128,15 @@ export class ProxyService extends BaseService {
         }
       } catch (error) {
         logger.warn('Failed to read OS system proxy; applying bare system mode', error as Error)
+      }
+      // Chromium resolves the system proxy itself, the Node stack cannot: with no URL here,
+      // in-process traffic (Pi agent runtime) goes direct while spawned runtimes stay proxied.
+      if (!config.proxyRules) {
+        const environmentProxy = resolveEnvironmentProxyConfig(this.inheritedProxyEnvironment)
+        if (environmentProxy) {
+          config.proxyRules = environmentProxy.proxyRules
+          config.proxyBypassRules = environmentProxy.proxyBypassRules
+        }
       }
     }
     return config

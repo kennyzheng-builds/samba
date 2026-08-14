@@ -1,5 +1,5 @@
 import { MockMainPreferenceServiceUtils } from '@test-mocks/main/PreferenceService'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   nodeProxyConfigureMock,
@@ -187,6 +187,50 @@ describe('ProxyService — preference wiring', () => {
     expect(sessionSetProxyMock).toHaveBeenCalledWith({ mode: 'system' })
     expect(appSetProxyMock).toHaveBeenCalledWith({ mode: 'system' })
     expect(nodeProxyConfigureMock).toHaveBeenCalledWith({ proxyRules: undefined, proxyBypassRules: undefined })
+  })
+
+  describe('with a proxy exported in the environment', () => {
+    beforeEach(() => {
+      vi.stubEnv('HTTPS_PROXY', 'http://env:8080')
+    })
+
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('proxies the Node stack from the environment when the OS proxy is unreadable (PAC/WPAD)', async () => {
+      // Chromium still resolves the system proxy itself, so only the Node stack — where the
+      // in-process Pi agent runtime lives — would otherwise be left connecting directly.
+      getSystemProxyMock.mockResolvedValue(null)
+      const manager = new ProxyService()
+      await (manager as any).onReady()
+      await reconcilerOf(manager).flush()
+
+      expect(nodeProxyConfigureMock).toHaveBeenCalledWith({
+        proxyRules: 'http://env:8080',
+        proxyBypassRules: 'localhost,127.0.0.1,::1'
+      })
+    })
+
+    it('lets the OS proxy win over the environment', async () => {
+      const manager = new ProxyService()
+      await (manager as any).onReady()
+      await reconcilerOf(manager).flush()
+
+      expect(nodeProxyConfigureMock).toHaveBeenCalledWith({
+        proxyRules: 'http://system:1080',
+        proxyBypassRules: 'localhost'
+      })
+    })
+
+    it('stays direct when the user turned the proxy off', async () => {
+      MockMainPreferenceServiceUtils.setPreferenceValue('app.proxy.mode', 'none')
+      const manager = new ProxyService()
+      await (manager as any).onReady()
+      await reconcilerOf(manager).flush()
+
+      expect(nodeProxyConfigureMock).toHaveBeenCalledWith({ proxyRules: undefined, proxyBypassRules: undefined })
+    })
   })
 
   it('re-applies when a proxy preference changes after ready', async () => {
