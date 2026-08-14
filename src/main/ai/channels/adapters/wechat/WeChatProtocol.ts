@@ -177,6 +177,11 @@ function aesEcbEncrypt(data: Buffer, key: Buffer): Buffer {
   return Buffer.concat([cipher.update(data), cipher.final()])
 }
 
+/** Ciphertext size of AES-128-ECB with PKCS7 padding, needed before encrypting. */
+function aesEcbPaddedSize(plaintextSize: number): number {
+  return Math.ceil((plaintextSize + 1) / 16) * 16
+}
+
 /**
  * Resolve the 16-byte AES key from an image_item.
  * Priority: image_item.aeskey (hex) > image_item.media.aes_key (base64)
@@ -303,10 +308,12 @@ async function cdnUploadImage(
   uin: string,
   toUserId: string,
   imageData: Buffer
-): Promise<{ downloadEncryptedQueryParam: string; aeskey: Buffer; ciphertextSize: number } | null> {
+): Promise<{ downloadEncryptedQueryParam: string; aeskeyHex: string; ciphertextSize: number } | null> {
   const aeskey = randomBytes(16)
+  const aeskeyHex = aeskey.toString('hex')
   const filekey = randomBytes(16).toString('hex')
   const md5Hash = await import('node:crypto').then((c) => c.createHash('md5').update(imageData).digest('hex'))
+  const ciphertextSize = aesEcbPaddedSize(imageData.length)
 
   // Step 1: get upload URL
   const raw = await apiFetch(
@@ -318,9 +325,10 @@ async function cdnUploadImage(
       to_user_id: toUserId,
       rawsize: imageData.length,
       rawfilemd5: md5Hash,
-      filesize: imageData.length,
+      // `filesize` is the ciphertext size the CDN expects to receive, not the plaintext size.
+      filesize: ciphertextSize,
       no_need_thumb: true,
-      aeskey: aeskey.toString('hex'),
+      aeskey: aeskeyHex,
       base_info: buildBaseInfo()
     },
     token,
@@ -349,7 +357,7 @@ async function cdnUploadImage(
     return null
   }
 
-  return { downloadEncryptedQueryParam, aeskey, ciphertextSize: ciphertext.length }
+  return { downloadEncryptedQueryParam, aeskeyHex, ciphertextSize }
 }
 
 // --------------- API helpers ---------------
@@ -832,7 +840,8 @@ export class WeixinBot {
           image_item: {
             media: {
               encrypt_query_param: uploaded.downloadEncryptedQueryParam,
-              aes_key: Buffer.from(uploaded.aeskey).toString('base64'),
+              // Receiving clients expect base64 of the 32-char hex key, not of the raw 16 key bytes.
+              aes_key: Buffer.from(uploaded.aeskeyHex, 'ascii').toString('base64'),
               encrypt_type: 1
             },
             mid_size: uploaded.ciphertextSize
