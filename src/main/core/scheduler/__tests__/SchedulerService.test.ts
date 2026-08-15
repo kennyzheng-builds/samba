@@ -180,3 +180,32 @@ describe('cron trigger', () => {
     expect(scheduler.getNextRun('nope')).toBeNull()
   })
 })
+
+describe('nextRunFor', () => {
+  it('projects a future cron fire without registering the trigger', () => {
+    const next = scheduler.nextRunFor({ kind: 'cron', expr: '0 0 1 1 *' })
+
+    expect(next).toBeInstanceOf(Date)
+    expect(next!.getTime()).toBeGreaterThan(Date.now())
+    // Projection only — nothing was scheduled, so nothing needs cleanup.
+    expect(scheduler.has('0 0 1 1 *')).toBe(false)
+  })
+
+  it('honours the trigger timezone', () => {
+    const utc = scheduler.nextRunFor({ kind: 'cron', expr: '0 12 * * *', timezone: 'UTC' })
+    const tokyo = scheduler.nextRunFor({ kind: 'cron', expr: '0 12 * * *', timezone: 'Asia/Tokyo' })
+
+    expect(utc).not.toBeNull()
+    expect(tokyo).not.toBeNull()
+    expect(utc!.getTime()).not.toBe(tokyo!.getTime())
+  })
+
+  it('returns null for interval and once triggers — neither has a calendar', () => {
+    expect(scheduler.nextRunFor({ kind: 'interval', ms: 60_000 })).toBeNull()
+    expect(scheduler.nextRunFor({ kind: 'once', at: Date.now() + 60_000 })).toBeNull()
+  })
+
+  it('returns null instead of throwing on an unparseable cron expression', () => {
+    expect(scheduler.nextRunFor({ kind: 'cron', expr: 'not a cron' })).toBeNull()
+  })
+})

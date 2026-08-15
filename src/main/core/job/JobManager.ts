@@ -2264,8 +2264,12 @@ export class JobManager extends BaseService {
         })
         // Consume the missed window: overdue detection reads lastRun/nextRun,
         // so without this every restart before the next natural fire would
-        // enqueue another make-up job for the same miss.
-        jobScheduleService.markFired(schedule.id, nowMs, null)
+        // enqueue another make-up job for the same miss. Project the next fire
+        // rather than clearing it — this step runs BEFORE `arm`, and nothing
+        // else rewrites nextRun until a natural fire, so a cleared cron would
+        // stay overdue (and read as "no next run") for a whole cron period.
+        const nextRun = application.get('SchedulerService').nextRunFor(schedule.trigger)
+        jobScheduleService.markFired(schedule.id, nowMs, nextRun?.getTime() ?? null)
         logger.info('Catch-up enqueued', { scheduleId: schedule.id, type: schedule.type, scheduledAt })
       }
     }

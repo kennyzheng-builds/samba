@@ -212,6 +212,29 @@ export class SchedulerService extends BaseService {
   }
 
   /**
+   * Next fire time a trigger *would* produce, without registering it — same
+   * throwaway Croner probe as `validateTrigger`. Callers that must know when a
+   * schedule fires next before (or without) arming it use this; `getNextRun`
+   * only answers for an already-registered id.
+   *
+   * @param trigger - Trigger config to project
+   * @returns The next fire `Date`, or `null` for interval / once (no calendar
+   *   to project) and for a cron expression Croner cannot parse
+   */
+  nextRunFor(trigger: Trigger): Date | null {
+    if (trigger.kind !== 'cron') return null
+    try {
+      const probe = new Cron(trigger.expr, { timezone: trigger.timezone, maxRuns: trigger.limit })
+      const next = probe.nextRun()
+      probe.stop()
+      return next ?? null
+    } catch (err) {
+      logger.warn('nextRunFor: cron probe failed', { expr: trigger.expr, err: (err as Error).message })
+      return null
+    }
+  }
+
+  /**
    * @param id - Schedule identifier
    * @returns `true` if a schedule with this id is registered (any kind)
    */

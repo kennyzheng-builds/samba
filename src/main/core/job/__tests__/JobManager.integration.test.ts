@@ -678,7 +678,7 @@ describe('JobManager integration', () => {
   })
 
   describe('startup recovery — catch-up', () => {
-    const intervalNoopHandler: JobHandler = {
+    const catchUpNoopHandler: JobHandler = {
       recovery: 'abandon',
       defaultConcurrency: 1,
       async execute() {
@@ -704,7 +704,7 @@ describe('JobManager integration', () => {
         })
         .returning()
 
-      const boot1 = await bootstrapManager({ handlers: [['task.interval', intervalNoopHandler]] })
+      const boot1 = await bootstrapManager({ handlers: [['task.interval', catchUpNoopHandler]] })
       await drainAllQueues(boot1.jobManager)
 
       expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
@@ -713,7 +713,49 @@ describe('JobManager integration', () => {
 
       // Restart before the next natural fire: the miss is already consumed,
       // so no second make-up job may appear.
-      const boot2 = await bootstrapManager({ handlers: [['task.interval', intervalNoopHandler]] })
+      const boot2 = await bootstrapManager({ handlers: [['task.interval', catchUpNoopHandler]] })
+      await drainAllQueues(boot2.jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+
+      await teardownManager(boot2.scheduler, boot2.jobManager)
+    })
+
+    it('projects the next cron fire when making up a miss instead of clearing it', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      // Half a day out, so croner's own (faked) timer cannot fire inside the
+      // bootstrap's 60 s advance whatever time of day the suite runs at.
+      const farHour = (new Date(now).getHours() + 12) % 24
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.cron',
+          trigger: { kind: 'cron', expr: `0 ${farHour} * * *` },
+          jobInputTemplate: { message: 'missed-daily-cron' },
+          enabled: true,
+          lastRun: now - 25 * 60 * 60_000,
+          // Yesterday's 09:00 came and went while the app was closed.
+          nextRun: now - 60 * 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const boot1 = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
+      await drainAllQueues(boot1.jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+      // Catch-up runs before arm and nothing else rewrites nextRun until a
+      // natural fire, so clearing it here would blank the schedule's "next
+      // run" for a whole cron period — and leave it overdue on every restart.
+      const afterCatchUp = jobScheduleService.getById(row.id)
+      expect(afterCatchUp?.nextRun).not.toBeNull()
+      expect(Date.parse(afterCatchUp!.nextRun!)).toBeGreaterThan(now)
+
+      await teardownManager(boot1.scheduler, boot1.jobManager)
+
+      const boot2 = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
       await drainAllQueues(boot2.jobManager)
 
       expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
