@@ -218,14 +218,16 @@ export class SchedulerService extends BaseService {
    * only answers for an already-registered id.
    *
    * @param trigger - Trigger config to project
+   * @param from - Project the first occurrence strictly after this instant
+   *   instead of after now; lets a caller ask "would it have fired since?"
    * @returns The next fire `Date`, or `null` for interval / once (no calendar
    *   to project) and for a cron expression Croner cannot parse
    */
-  nextRunFor(trigger: Trigger): Date | null {
+  nextRunFor(trigger: Trigger, from?: Date): Date | null {
     if (trigger.kind !== 'cron') return null
     try {
       const probe = new Cron(trigger.expr, { timezone: trigger.timezone, maxRuns: trigger.limit })
-      const next = probe.nextRun()
+      const next = probe.nextRun(from)
       probe.stop()
       return next ?? null
     } catch (err) {

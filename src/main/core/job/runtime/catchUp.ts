@@ -1,9 +1,16 @@
 import { loggerService } from '@logger'
-import type { JobScheduleSnapshot } from '@shared/data/api/schemas/jobs'
+import type { JobScheduleSnapshot, Trigger } from '@shared/data/api/schemas/jobs'
 
 import type { JobHandler, JobMissEvent } from '../types'
 
 const logger = loggerService.withContext('JobCatchUp')
+
+/**
+ * Projects the first occurrence of a cron trigger strictly after `fromMs`, or
+ * `null` if it has none. Injected by the caller rather than computed here:
+ * croner belongs to SchedulerService, and this module stays pure.
+ */
+export type CronProjector = (trigger: Extract<Trigger, { kind: 'cron' }>, fromMs: number) => number | null
 
 /**
  * What the caller (JobManager) should do for this schedule.
@@ -27,7 +34,11 @@ export interface CatchUpAction {
  * iteration and the actual side-effect dispatch.
  *
  * "Overdue" depends on trigger kind:
- *   - cron: `schedule.nextRun <= now` (Scheduler / JobManager keep this updated)
+ *   - cron: `schedule.nextRun <= now` when that column is populated. Only a
+ *     fire writes it, so a schedule that has never fired (just created, or its
+ *     trigger just edited) falls back to the same anchor rule as interval —
+ *     `projectNextRun(trigger, lastRun ?? createdAt) <= now`. Without the
+ *     fallback, a cron task missed before its first fire is never caught up.
  *   - interval: `(lastRun ?? createdAt) + ms <= now` — Scheduler does not
  *     compute a nextRun for non-cron triggers, so the catch-up branch falls
  *     back to lastRun + interval. Without this, an interval schedule with
@@ -41,9 +52,14 @@ export interface CatchUpAction {
  *
  * `after-idle` is deferred (requires PowerMonitor.getSystemIdleTime API).
  */
-export function computeCatchUpAction(schedule: JobScheduleSnapshot, handler: JobHandler, nowMs: number): CatchUpAction {
+export function computeCatchUpAction(
+  schedule: JobScheduleSnapshot,
+  handler: JobHandler,
+  nowMs: number,
+  projectNextRun?: CronProjector
+): CatchUpAction {
   const lastRunMs = schedule.lastRun ? Date.parse(schedule.lastRun) : null
-  const isOverdue = isScheduleOverdue(schedule, lastRunMs, nowMs)
+  const isOverdue = isScheduleOverdue(schedule, lastRunMs, nowMs, projectNextRun)
 
   if (!isOverdue) {
     return { scheduleId: schedule.id, type: schedule.type, shouldEnqueue: false, enqueueDelayMs: 0, missEvent: null }
@@ -75,11 +91,22 @@ export function computeCatchUpAction(schedule: JobScheduleSnapshot, handler: Job
  * Per-trigger overdue rule. Separated out so the trigger-kind switch is one
  * place and computeCatchUpAction stays focused on policy.
  */
-function isScheduleOverdue(schedule: JobScheduleSnapshot, lastRunMs: number | null, nowMs: number): boolean {
+function isScheduleOverdue(
+  schedule: JobScheduleSnapshot,
+  lastRunMs: number | null,
+  nowMs: number,
+  projectNextRun?: CronProjector
+): boolean {
   const trigger = schedule.trigger
   if (trigger.kind === 'cron') {
     const nextRunMs = schedule.nextRun ? Date.parse(schedule.nextRun) : null
-    return nextRunMs !== null && nextRunMs <= nowMs
+    if (nextRunMs !== null) return nextRunMs <= nowMs
+    // Never fired — no persisted nextRun to compare against. Same anchor as
+    // the interval branch: if the app had been running, the occurrence
+    // following the anchor would have fired.
+    if (!projectNextRun) return false
+    const projected = projectNextRun(trigger, lastRunMs ?? Date.parse(schedule.createdAt))
+    return projected !== null && projected <= nowMs
   }
   if (trigger.kind === 'interval') {
     // Anchor: lastRun (if ever fired) else createdAt. Scheduler does not write

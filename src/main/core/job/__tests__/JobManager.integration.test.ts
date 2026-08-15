@@ -721,6 +721,66 @@ describe('JobManager integration', () => {
       await teardownManager(boot2.scheduler, boot2.jobManager)
     })
 
+    it('makes up a cron fire missed before the schedule ever fired', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const farHour = (new Date(now).getHours() + 12) % 24
+      // Created yesterday, never fired, so nextRun was never written — the
+      // state every cron task is in between creation and its first fire.
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.cron',
+          trigger: { kind: 'cron', expr: `0 ${farHour} * * *` },
+          jobInputTemplate: { message: 'never-fired-cron' },
+          enabled: true,
+          lastRun: null,
+          nextRun: null,
+          createdAt: now - 25 * 60 * 60_000,
+          updatedAt: now - 25 * 60 * 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+      expect(jobScheduleService.getById(row.id)?.nextRun).not.toBeNull()
+
+      await teardownManager(scheduler, jobManager)
+    })
+
+    it('leaves a never-fired cron alone while its first occurrence is still ahead', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const farHour = (new Date(now).getHours() + 12) % 24
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.cron',
+          trigger: { kind: 'cron', expr: `0 ${farHour} * * *` },
+          jobInputTemplate: { message: 'fresh-cron' },
+          enabled: true,
+          lastRun: null,
+          nextRun: null,
+          // Created a minute ago: its first occurrence is ~12 h out.
+          createdAt: now - 60_000,
+          updatedAt: now - 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+
+      await teardownManager(scheduler, jobManager)
+    })
+
     it('projects the next cron fire when making up a miss instead of clearing it', async () => {
       const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
       const now = Date.now()

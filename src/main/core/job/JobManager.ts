@@ -19,7 +19,7 @@ import { JOB_ERROR_CODES } from '@shared/data/api/schemas/jobs'
 
 import type { JobPayloadOf, JobType } from './jobRegistry'
 import { computeBackoff } from './runtime/backoff'
-import { computeCatchUpAction } from './runtime/catchUp'
+import { computeCatchUpAction, type CronProjector } from './runtime/catchUp'
 import { DispatchQueue } from './runtime/DispatchQueue'
 import { runStartupRecovery } from './runtime/recovery'
 import {
@@ -2235,6 +2235,9 @@ export class JobManager extends BaseService {
    */
   private async detectAndDispatchOverdue(schedules: JobScheduleSnapshot[], startIndex = 0): Promise<number> {
     const nowMs = Date.now()
+    const scheduler = application.get('SchedulerService')
+    const projectNextRun: CronProjector = (trigger, fromMs) =>
+      scheduler.nextRunFor(trigger, new Date(fromMs))?.getTime() ?? null
     for (let i = startIndex; i < schedules.length; i++) {
       const schedule = schedules[i]
       // Mirror `runStartupRecoveryFlow`'s per-step shutdown check so a teardown
@@ -2245,7 +2248,7 @@ export class JobManager extends BaseService {
       if (this._isShuttingDown || this.isQuiesced) return i
       const handler = this.handlers.get(schedule.type)
       if (!handler) continue
-      const action = computeCatchUpAction(schedule, handler, nowMs)
+      const action = computeCatchUpAction(schedule, handler, nowMs, projectNextRun)
       if (action.missEvent && handler.onMissed) {
         try {
           await handler.onMissed(action.missEvent)
@@ -2268,7 +2271,7 @@ export class JobManager extends BaseService {
         // rather than clearing it — this step runs BEFORE `arm`, and nothing
         // else rewrites nextRun until a natural fire, so a cleared cron would
         // stay overdue (and read as "no next run") for a whole cron period.
-        const nextRun = application.get('SchedulerService').nextRunFor(schedule.trigger)
+        const nextRun = scheduler.nextRunFor(schedule.trigger)
         jobScheduleService.markFired(schedule.id, nowMs, nextRun?.getTime() ?? null)
         logger.info('Catch-up enqueued', { scheduleId: schedule.id, type: schedule.type, scheduledAt })
       }

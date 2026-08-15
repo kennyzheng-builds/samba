@@ -111,6 +111,64 @@ describe('computeCatchUpAction — cron trigger', () => {
   })
 })
 
+describe('computeCatchUpAction — cron that has never fired', () => {
+  // Only a fire writes nextRun, so a just-created (or just-retriggered) cron
+  // schedule has none. Overdue then hangs entirely on the projector.
+  const neverFired = (createdAtMs: number) =>
+    makeSchedule({
+      trigger: { kind: 'cron', expr: '0 9 * * *' },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      nextRun: null,
+      lastRun: null,
+      createdAt: new Date(createdAtMs).toISOString()
+    })
+
+  it('is overdue when the occurrence following createdAt has passed', () => {
+    const createdAt = NOW - 25 * 60 * 60_000
+    const projected: number[] = []
+    const result = computeCatchUpAction(neverFired(createdAt), handlerWithMissed(), NOW, (_trigger, fromMs) => {
+      projected.push(fromMs)
+      return fromMs + 60 * 60_000 // an occurrence one hour after creation
+    })
+
+    expect(projected).toEqual([createdAt])
+    expect(result.shouldEnqueue).toBe(true)
+    expect(result.missEvent?.lastFireAt).toBeNull()
+  })
+
+  it('is not overdue when the next occurrence is still ahead', () => {
+    const result = computeCatchUpAction(neverFired(NOW - 60_000), handlerWithMissed(), NOW, () => NOW + 60 * 60_000)
+
+    expect(result.shouldEnqueue).toBe(false)
+    expect(result.missEvent).toBeNull()
+  })
+
+  it('anchors on lastRun rather than createdAt once the schedule has fired', () => {
+    const schedule = makeSchedule({
+      trigger: { kind: 'cron', expr: '0 9 * * *' },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      nextRun: null,
+      lastRun: new Date(NOW - 60_000).toISOString(),
+      createdAt: new Date(NOW - 100 * 60 * 60_000).toISOString()
+    })
+    const projected: number[] = []
+
+    computeCatchUpAction(schedule, handlerWithMissed(), NOW, (_trigger, fromMs) => {
+      projected.push(fromMs)
+      return null
+    })
+
+    expect(projected).toEqual([NOW - 60_000])
+  })
+
+  it('stays not-overdue when no projector is supplied', () => {
+    const result = computeCatchUpAction(neverFired(NOW - 25 * 60 * 60_000), handlerWithMissed(), NOW)
+
+    expect(result.shouldEnqueue).toBe(false)
+    expect(result.missEvent).toBeNull()
+  })
+})
+
 describe('computeCatchUpAction — interval trigger', () => {
   it('uses lastRun + ms as the overdue anchor when lastRun present', () => {
     const schedule = makeSchedule({
