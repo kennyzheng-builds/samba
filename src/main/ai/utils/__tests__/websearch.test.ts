@@ -2,6 +2,7 @@ import type { Model } from '@shared/data/types/model'
 import type { Provider } from '@shared/data/types/provider'
 import { describe, expect, it } from 'vitest'
 
+import { appendDashScopeWebExtractor } from '../../provider/custom/dashscope/dashscopeWebExtractor'
 import { buildProviderBuiltinWebSearchConfig, getWebSearchParams } from '../websearch'
 
 const webSearchConfig = { maxResults: 50, excludeDomains: [] }
@@ -118,6 +119,37 @@ describe('dashscope built-in web search: endpoint x model matrix', () => {
       ).toBeUndefined()
     }
   )
+
+  // Routing a Qwen3.x model's web tools to the server side (`resolveWebToolRoutes` withholds the client
+  // ones there — Bailian answers their `web_search` wire name with its own argument-less built-in call)
+  // has to deliver BOTH capabilities. Search comes from the config below; fetch rides the serialized
+  // body, because @ai-sdk/openai drops the `web_extractor` tool id and no urlContext factory can carry
+  // it. Reading the missing factory as "server fetch injects nothing" is the trap this pins shut.
+  it('delivers web_extractor alongside the Responses web_search tool for a server-routed model', () => {
+    const config = buildProviderBuiltinWebSearchConfig(
+      'openai',
+      webSearchConfig,
+      dashscope('qwen3.7-plus'),
+      preset('dashscope')
+    )
+    expect(config).toEqual({ openai: {} })
+
+    // What providerWebSearchFeature's config turns into on the wire, then the provider's custom fetch.
+    const body = appendDashScopeWebExtractor(JSON.stringify({ model: 'qwen3.7-plus', tools: [{ type: 'web_search' }] }))
+    expect(JSON.parse(body as string).tools).toEqual([{ type: 'web_search' }, { type: 'web_extractor' }])
+  })
+
+  // …and the one mode where it does not: the extractor needs thinking, so reasoning off leaves search
+  // alone on the wire. `resolveWebToolRoutes` mirrors this by withdrawing the server fetch route, so
+  // no request is planned around a tool this body will not carry.
+  it('carries web_search alone when reasoning is off, matching the withdrawn server fetch route', () => {
+    const body = JSON.stringify({
+      model: 'qwen3.7-plus',
+      tools: [{ type: 'web_search' }],
+      reasoning: { effort: 'none' }
+    })
+    expect(JSON.parse(appendDashScopeWebExtractor(body) as string).tools).toEqual([{ type: 'web_search' }])
+  })
 
   // The chat path is unaffected either way: every search-capable SKU still gets enable_search there.
   it.each(['qwen-plus', 'qwen3.7-max', 'deepseek-v3.2'])('still sends enable_search on chat for %s', (apiModelId) => {

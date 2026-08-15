@@ -3,7 +3,7 @@ import { ENDPOINT_TYPE, type Model } from '@shared/data/types/model'
 import type { Provider } from '@shared/data/types/provider'
 import { mapRegexToPatterns } from '@shared/utils/blacklistMatchPattern'
 import { getRawModelId, isOpenAIDeepResearchModel, isOpenAIWebSearchChatCompletionOnlyModel } from '@shared/utils/model'
-import { isBuiltinWebFetchAvailable, matchesPreset } from '@shared/utils/provider'
+import { isBuiltinWebFetchAvailable, matchesPreset, servesDashScopeResponsesWebSearch } from '@shared/utils/provider'
 
 import type { KimiFormulaCredentials } from '../provider/custom/moonshotProvider'
 import type { AppProviderId } from '../types'
@@ -73,23 +73,6 @@ export function getWebSearchParams(model: Model, provider: Provider | undefined)
 }
 
 /**
- * Bailian splits built-in web search by endpoint. The Responses `{ type: 'web_search' }` tool is served
- * for the Qwen3.x line only — "Responses API 仅支持 Qwen3.7 Max系列、Qwen3.6、Qwen3.5、qwen3-max"
- * (help.aliyun.com/zh/model-studio/web-search). The `qwen-plus` / `qwen-flash` / character aliases and the
- * hosted third-party models search through Chat Completions' `enable_search` instead (see
- * `getWebSearchParams`), so emitting the tool for them yields a provider error or an empty result.
- *
- * Those aliases are ordered chat-first in the registry, so this only guards a manual endpoint override.
- */
-function servesResponsesWebSearch(model: Model): boolean {
-  // Key off the shared wire-id resolution: `apiModelId` alone is optional on the
-  // runtime Model, and reading it directly made this silently return false — the
-  // route still picked the server side, so the request went out with no search
-  // tool AND no client tools.
-  return /^qwen3[.-]/.test(getRawModelId(model))
-}
-
-/**
  * range in [0, 100]
  * @param maxResults
  */
@@ -133,7 +116,7 @@ export function buildProviderBuiltinWebSearchConfig(
       if (model && provider && matchesPreset(provider, 'dashscope')) {
         // `undefined` (not `{}`) is what suppresses the tool: `providerWebSearchFeature` applies on a
         // truthy config, so an empty object would still attach it.
-        return servesResponsesWebSearch(model) ? { openai: {} } : undefined
+        return servesDashScopeResponsesWebSearch(model) ? { openai: {} } : undefined
       }
       const searchContextSize =
         model && isOpenAIDeepResearchModel(model)

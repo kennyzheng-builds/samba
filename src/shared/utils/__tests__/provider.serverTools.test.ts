@@ -285,6 +285,89 @@ describe('conflict-aware routing', () => {
     })
   })
 
+  // Bailian answers a function tool named `web_search` with its own built-in `web_search_call` item,
+  // which carries no arguments — the client tool's schema then rejects every call (user report:
+  // "他说自己有一个tool，是web_search，但每次他尝试调用，都会失败"). The client side is not a usable
+  // search backend there, whatever the user's tool-source preference says.
+  describe('Bailian reserves the client web_search wire name on Responses', () => {
+    const dashscope = {
+      id: 'dashscope',
+      defaultChatEndpoint: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS,
+      serverTools: [
+        { id: SERVER_TOOL.WEB_SEARCH, modelScope: 'model-dependent' },
+        { id: SERVER_TOOL.URL_CONTEXT, modelScope: 'model-dependent' }
+      ]
+    } as Provider
+    const qwenPlus = model('qwen3.7-plus', {
+      capabilities: [MODEL_CAPABILITY.FUNCTION_CALL],
+      endpointTypes: [ENDPOINT_TYPE.OPENAI_RESPONSES, ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]
+    })
+    const clientBackends = { webSearchEnabled: true, clientSearchAvailable: true, clientFetchAvailable: true }
+
+    // Fetch rides along to the server side rather than being dropped: every SKU Bailian serves the
+    // Responses search tool on also serves its web-extractor.
+    it('serves search from the built-in side even when client tools are preferred', () => {
+      expect(resolveWebToolRoutes(qwenPlus, dashscope, { ...clientBackends, clientToolsPreferred: true })).toEqual({
+        webSearch: 'server',
+        webFetch: 'server'
+      })
+    })
+
+    // Withholding the client tool is only ever a swap for the built-in. Where Bailian serves no
+    // built-in there is nothing to swap in, so the client route stays — dropping it on the guess that
+    // the name is reserved anyway would trade a search that errors for no search at all.
+    it.each([
+      // Responses-served SKU that the registry gives no built-in search.
+      ['qwen3.5-27b', [ENDPOINT_TYPE.OPENAI_RESPONSES]],
+      // Chat-line aliases forced onto Responses by hand: eligible in the registry, but Bailian serves
+      // their search through Chat's enable_search, so no Responses built-in exists to take over.
+      // `qwen-plus` additionally carries web-extractor eligibility — which is worthless here, since
+      // the extractor only ever rides along with a `web_search` that reached the body.
+      ['qwen-turbo', [ENDPOINT_TYPE.OPENAI_RESPONSES, ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]],
+      ['qwen-plus', [ENDPOINT_TYPE.OPENAI_RESPONSES, ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS]]
+    ] as const)('keeps the client route for %s, which has no built-in to swap in', (apiModelId, endpointTypes) => {
+      const noBuiltin = model(apiModelId, {
+        capabilities: [MODEL_CAPABILITY.FUNCTION_CALL],
+        endpointTypes: [...endpointTypes]
+      })
+
+      // Both tool-source preferences, because the server side is the default one: registry eligibility
+      // alone used to send these to a built-in Bailian never delivers on this endpoint
+      // (`buildProviderBuiltinWebSearchConfig` returns undefined), and the client tools were withheld
+      // for the server route, so the request went out carrying no web tool at all.
+      for (const clientToolsPreferred of [true, false]) {
+        expect(resolveWebToolRoutes(noBuiltin, dashscope, { ...clientBackends, clientToolsPreferred })).toEqual({
+          webSearch: 'client',
+          webFetch: 'client'
+        })
+      }
+    })
+
+    // The extractor Bailian would fetch with needs thinking, and `appendDashScopeWebExtractor` keeps
+    // `web_search` alone when reasoning is off — so fetch has no server backend in that mode. Search
+    // still runs (the built-in search tool has no such constraint); fetch says so instead of pointing
+    // at a tool the request never carries.
+    it('drops server fetch when reasoning is off, since the extractor needs thinking', () => {
+      expect(
+        resolveWebToolRoutes(qwenPlus, dashscope, {
+          ...clientBackends,
+          clientToolsPreferred: true,
+          reasoningEffort: 'none'
+        })
+      ).toEqual({ webSearch: 'server', webFetch: 'none', reasons: { webFetch: 'no-backend' } })
+    })
+
+    it('keeps the client route on Chat Completions, where the name is not reserved', () => {
+      expect(
+        resolveWebToolRoutes(qwenPlus, dashscope, {
+          ...clientBackends,
+          clientToolsPreferred: true,
+          endpointType: ENDPOINT_TYPE.OPENAI_CHAT_COMPLETIONS
+        })
+      ).toMatchObject({ webSearch: 'client' })
+    })
+  })
+
   it('suppresses OpenAI native search under minimal reasoning effort', () => {
     const gpt5 = model('gpt-5', { capabilities: [MODEL_CAPABILITY.FUNCTION_CALL, MODEL_CAPABILITY.REASONING] })
     const openaiProvider = {

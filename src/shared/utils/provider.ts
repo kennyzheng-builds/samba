@@ -2,6 +2,7 @@ import {
   isServerToolModelEligible as isRegistryServerToolModelEligible,
   isWebSearchEffortUnsupported,
   matchVendor,
+  REASONING_EFFORT,
   SERVER_TOOL,
   SERVER_TOOL_MODEL_SCOPE,
   type ServerTool,
@@ -305,14 +306,33 @@ export function isBuiltinWebFetchAvailable(
 }
 
 /**
+ * Bailian splits built-in web search by endpoint. The Responses `{ type: 'web_search' }` tool is served
+ * for the Qwen3.x line only — "Responses API 仅支持 Qwen3.8、Qwen3.7、Qwen3.6、Qwen3.5、qwen3-max"
+ * (help.aliyun.com/zh/model-studio/web-search). The `qwen-plus` / `qwen-flash` / character aliases and the
+ * hosted third-party models search through Chat Completions' `enable_search` instead (see
+ * `getWebSearchParams`), so emitting the tool for them yields a provider error or an empty result.
+ *
+ * Both the request's route and its delivery key off this one predicate: when they disagree the route
+ * picks the server side while nothing gets injected, and the request goes out with no search tool AND
+ * no client tools.
+ */
+export function servesDashScopeResponsesWebSearch(model: Model): boolean {
+  // Key off the shared wire-id resolution: `apiModelId` alone is optional on the
+  // runtime Model, and reading it directly made this silently return false.
+  return /^qwen3[.-]/.test(getRawModelId(model))
+}
+
+/**
  * Select one web-tool side for a request, then expose only the capabilities
  * available on that side.
  *
  * Provider/model conflicts (pre-3 Gemini native tools × function tools, OpenAI
  * GPT-5 minimal reasoning × native web_search) enter here as availability
  * inputs, so a conflicted server side falls back to the client tools instead
- * of being vetoed downstream. Each capability that lands on 'none' carries a
- * reason code for UI messaging.
+ * of being vetoed downstream. The mirror image also exists — a host that
+ * reserves the client tool's wire name for a built-in of its own (Bailian on
+ * Responses) withdraws the client side instead. Each capability that lands on
+ * 'none' carries a reason code for UI messaging.
  */
 export function resolveWebToolRoutes(
   model: Model,
@@ -331,7 +351,6 @@ export function resolveWebToolRoutes(
   }
 ): WebToolRoutes {
   const supportsClientTools = isFunctionCallingModel(model)
-  const clientSearchAvailable = options.webSearchEnabled && supportsClientTools && options.clientSearchAvailable
   const clientFetchAvailable = options.webSearchEnabled && supportsClientTools && options.clientFetchAvailable
   const serverSearchEligible =
     options.webSearchEnabled && provider ? isBuiltinWebSearchAvailable(model, provider, options.endpointType) : false
@@ -351,12 +370,46 @@ export function resolveWebToolRoutes(
     (isOpenAIProvider(provider) || isOpenAIChatProvider(provider) || isAzureOpenAIProvider(provider)) &&
     isWebSearchEffortUnsupported(getRawModelId(model), options.reasoningEffort)
 
-  const serverSearchAvailable = serverSearchEligible && !googleToolConflict && !openaiMinimalConflict
-  const serverFetchAvailable = serverFetchEligible && !googleToolConflict
+  /** Bailian's Responses endpoint, where its own built-in web tools displace the client ones. */
+  const onDashScopeResponses =
+    provider !== undefined &&
+    matchesPreset(provider, 'dashscope') &&
+    resolveServerToolEndpoint(model, provider, options.endpointType) === ENDPOINT_TYPE.OPENAI_RESPONSES
+
+  // Registry eligibility says nothing about which of Bailian's two search mechanisms an endpoint
+  // serves: on Responses only the Qwen3.x line gets the built-in tool, and
+  // `buildProviderBuiltinWebSearchConfig` delivers nothing for the rest. Routing those server-side
+  // would withhold the client tools for a built-in that never reaches the wire.
+  const dashscopeSearchUnserved = onDashScopeResponses && !servesDashScopeResponsesWebSearch(model)
+
+  const serverSearchAvailable =
+    serverSearchEligible && !googleToolConflict && !openaiMinimalConflict && !dashscopeSearchUnserved
+
+  // `appendDashScopeWebExtractor` appends the fetch tool only alongside a `web_search` that actually
+  // made it into the body, and only in thinking mode — Bailian rejects the pair otherwise. Server
+  // fetch there is real exactly when both hold; report it unavailable rather than routing fetch at a
+  // tool the request will not carry.
+  const dashscopeExtractorUnserved =
+    onDashScopeResponses && (!serverSearchAvailable || options.reasoningEffort === REASONING_EFFORT.NONE)
+
+  const serverFetchAvailable = serverFetchEligible && !googleToolConflict && !dashscopeExtractorUnserved
+
+  // Bailian's Responses API reserves the client search tool's wire name (`web_search`) for its own
+  // built-in: a function tool sent under that name comes back as a provider-executed `web_search_call`
+  // item carrying no arguments, which the AI SDK still checks against the client tool's schema, so
+  // `query` is missing and every single call is rejected. Withdrawing the client tool takes the
+  // preference for the client side with it — otherwise "prefer client tools" would strand search on
+  // 'none' while the server side that does work sits unused. Only ever a swap: `serverSearchAvailable`
+  // already means the built-in is there to take over, so this never leaves a request with no search.
+  const searchNameReserved = serverSearchAvailable && onDashScopeResponses
+  const clientToolsPreferred = options.clientToolsPreferred && !searchNameReserved
+  const clientSearchAvailable =
+    options.webSearchEnabled && supportsClientTools && options.clientSearchAvailable && !searchNameReserved
+
   const clientAvailable = clientSearchAvailable || clientFetchAvailable
   const serverAvailable = serverSearchAvailable || serverFetchAvailable
 
-  const selectedSide: Exclude<WebToolRoute, 'none'> | undefined = options.clientToolsPreferred
+  const selectedSide: Exclude<WebToolRoute, 'none'> | undefined = clientToolsPreferred
     ? clientAvailable
       ? 'client'
       : serverAvailable
