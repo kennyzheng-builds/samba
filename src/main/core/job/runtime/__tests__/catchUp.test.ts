@@ -120,7 +120,8 @@ describe('computeCatchUpAction — cron that has never fired', () => {
       catchUpPolicy: { kind: 'after-startup', minutes: 1 },
       nextRun: null,
       lastRun: null,
-      createdAt: new Date(createdAtMs).toISOString()
+      createdAt: new Date(createdAtMs).toISOString(),
+      updatedAt: new Date(createdAtMs).toISOString()
     })
 
   it('is overdue when the occurrence following createdAt has passed', () => {
@@ -169,6 +170,70 @@ describe('computeCatchUpAction — cron that has never fired', () => {
   })
 })
 
+describe('computeCatchUpAction — fires suppressed rather than lost', () => {
+  // Pause / resume / trigger edits stamp updatedAt but never advance
+  // nextRun / lastRun, stranding an expected fire in the past. Making that up
+  // would run precisely what the user suppressed.
+  it('ignores a cron fire that fell inside a pause the user has since lifted', () => {
+    const schedule = makeSchedule({
+      trigger: { kind: 'cron', expr: '0 9 * * *' },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      lastRun: new Date(NOW - 26 * 60 * 60_000).toISOString(),
+      nextRun: new Date(NOW - 2 * 60 * 60_000).toISOString(),
+      // Resumed after that fire time came and went.
+      updatedAt: new Date(NOW - 60 * 60_000).toISOString()
+    })
+
+    const result = computeCatchUpAction(schedule, handlerWithMissed(), NOW)
+
+    expect(result.shouldEnqueue).toBe(false)
+    expect(result.missEvent).toBeNull()
+  })
+
+  it('ignores an interval fire that fell inside a pause the user has since lifted', () => {
+    const schedule = makeSchedule({
+      trigger: { kind: 'interval', ms: 60 * 60_000 },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      lastRun: new Date(NOW - 5 * 60 * 60_000).toISOString(),
+      updatedAt: new Date(NOW - 60 * 60_000).toISOString()
+    })
+
+    const result = computeCatchUpAction(schedule, handlerWithMissed(), NOW)
+
+    expect(result.shouldEnqueue).toBe(false)
+  })
+
+  it('ignores a never-fired cron whose first occurrence fell inside a lifted pause', () => {
+    const schedule = makeSchedule({
+      trigger: { kind: 'cron', expr: '0 9 * * *' },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      nextRun: null,
+      lastRun: null,
+      createdAt: new Date(NOW - 26 * 60 * 60_000).toISOString(),
+      updatedAt: new Date(NOW - 60 * 60_000).toISOString()
+    })
+
+    const result = computeCatchUpAction(schedule, handlerWithMissed(), NOW, (_t, fromMs) => fromMs + 60 * 60_000)
+
+    expect(result.shouldEnqueue).toBe(false)
+  })
+
+  it('still makes up a fire the app missed after the last edit', () => {
+    const schedule = makeSchedule({
+      trigger: { kind: 'cron', expr: '0 9 * * *' },
+      catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+      lastRun: new Date(NOW - 26 * 60 * 60_000).toISOString(),
+      nextRun: new Date(NOW - 2 * 60 * 60_000).toISOString(),
+      // Prompt edited well before the fire that was then lost to a closed app.
+      updatedAt: new Date(NOW - 20 * 60 * 60_000).toISOString()
+    })
+
+    const result = computeCatchUpAction(schedule, handlerWithMissed(), NOW)
+
+    expect(result.shouldEnqueue).toBe(true)
+  })
+})
+
 describe('computeCatchUpAction — interval trigger', () => {
   it('uses lastRun + ms as the overdue anchor when lastRun present', () => {
     const schedule = makeSchedule({
@@ -186,7 +251,9 @@ describe('computeCatchUpAction — interval trigger', () => {
     const schedule = makeSchedule({
       trigger: { kind: 'interval', ms: 30_000 },
       catchUpPolicy: { kind: 'skip-missed' },
-      createdAt: new Date(NOW - 120_000).toISOString()
+      createdAt: new Date(NOW - 120_000).toISOString(),
+      // Never touched since creation — nothing suppressed the missed fire.
+      updatedAt: new Date(NOW - 120_000).toISOString()
     })
     // Created 120s ago, interval 30s → overdue (multiple intervals passed).
     const result = computeCatchUpAction(schedule, handlerWithMissed(), NOW)

@@ -9,6 +9,7 @@
 import { application } from '@application'
 import { agentTable } from '@data/db/schemas/agent'
 import { agentChannelTable, agentChannelTaskTable } from '@data/db/schemas/agentChannel'
+import { jobScheduleTable } from '@data/db/schemas/job'
 import { agentChannelService } from '@data/services/AgentChannelService'
 import { agentSessionService } from '@data/services/AgentSessionService'
 import { jobScheduleService } from '@data/services/JobScheduleService'
@@ -23,6 +24,7 @@ import type { AgentTaskForm } from '@shared/ipc/schemas/ai'
 import { setupTestDatabase } from '@test-helpers/db'
 import { MockMainCacheServiceExport } from '@test-mocks/main/CacheService'
 import { MockMainDbServiceExport } from '@test-mocks/main/DbService'
+import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Registering a second schedule type exercises the type guard; the dummy
@@ -103,6 +105,15 @@ describe('AgentJobsService', () => {
       .from(agentChannelTaskTable)
       .all()
       .filter((r) => r.taskId === taskId)
+  }
+
+  /** Record a past fire the way `markFired` does at the moment it happens. */
+  function backdateLastFire(scheduleId: string, firedAtMs: number): void {
+    dbh.db
+      .update(jobScheduleTable)
+      .set({ lastRun: firedAtMs, updatedAt: firedAtMs })
+      .where(eq(jobScheduleTable.id, scheduleId))
+      .run()
   }
 
   function getIntervalEntry(scheduleId: string): unknown {
@@ -242,8 +253,9 @@ describe('AgentJobsService', () => {
 
     it('catches a fire missed while the app was closed up on the next startup', () => {
       const task = service.createTask(AGENT_ID, form)
-      // App closed for 10 minutes; the 60 s interval fired nowhere.
-      jobScheduleService.markFired(task.id, Date.now() - 10 * 60_000, null)
+      // App closed for 10 minutes; the 60 s interval fired nowhere. The fire
+      // is also the row's last write, as it is on the real markFired path.
+      backdateLastFire(task.id, Date.now() - 10 * 60_000)
 
       const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
 
@@ -253,7 +265,20 @@ describe('AgentJobsService', () => {
 
     it('keeps a task whose interval has not elapsed out of the catch-up sweep', () => {
       const task = service.createTask(AGENT_ID, form)
-      jobScheduleService.markFired(task.id, Date.now() - 10_000, null)
+      backdateLastFire(task.id, Date.now() - 10_000)
+
+      const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
+
+      expect(action.shouldEnqueue).toBe(false)
+    })
+
+    it('leaves a fire that fell inside a pause out of the catch-up sweep after resume', async () => {
+      const task = service.createTask(AGENT_ID, form)
+      backdateLastFire(task.id, Date.now() - 10 * 60_000)
+      // Pause and resume both stamp updatedAt, marking the stranded fire as
+      // suppressed on purpose rather than lost to a closed app.
+      await service.pauseTask(AGENT_ID, task.id)
+      service.resumeTask(AGENT_ID, task.id)
 
       const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
 

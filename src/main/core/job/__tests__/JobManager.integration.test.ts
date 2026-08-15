@@ -696,9 +696,12 @@ describe('JobManager integration', () => {
           trigger: { kind: 'interval', ms: 60 * 60_000 },
           jobInputTemplate: { message: 'missed-while-closed' },
           enabled: true,
-          // Last fired three hours ago — the hourly fire was missed.
+          // Last fired three hours ago — the hourly fire was missed. The fire
+          // is also what last wrote the row, as markFired stamps updatedAt.
           lastRun: now - 3 * 60 * 60_000,
           nextRun: null,
+          createdAt: now - 24 * 60 * 60_000,
+          updatedAt: now - 3 * 60 * 60_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 1 },
           metadata: {}
         })
@@ -781,6 +784,37 @@ describe('JobManager integration', () => {
       await teardownManager(scheduler, jobManager)
     })
 
+    it('does not make up a fire that fell inside a pause the user has since lifted', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const farHour = (new Date(now).getHours() + 12) % 24
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.cron',
+          trigger: { kind: 'cron', expr: `0 ${farHour} * * *` },
+          jobInputTemplate: { message: 'paused-across-fire' },
+          enabled: true,
+          lastRun: now - 26 * 60 * 60_000,
+          // Due two hours ago; nothing advances this column while paused.
+          nextRun: now - 2 * 60 * 60_000,
+          createdAt: now - 48 * 60 * 60_000,
+          // Resumed an hour ago — after the fire it was paused through.
+          updatedAt: now - 60 * 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
+      await drainAllQueues(jobManager)
+
+      // Making this up would run the agent for a fire the pause suppressed.
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+
+      await teardownManager(scheduler, jobManager)
+    })
+
     it('projects the next cron fire when making up a miss instead of clearing it', async () => {
       const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
       const now = Date.now()
@@ -795,8 +829,10 @@ describe('JobManager integration', () => {
           jobInputTemplate: { message: 'missed-daily-cron' },
           enabled: true,
           lastRun: now - 25 * 60 * 60_000,
-          // Yesterday's 09:00 came and went while the app was closed.
+          // Yesterday's fire came and went while the app was closed.
           nextRun: now - 60 * 60_000,
+          createdAt: now - 48 * 60 * 60_000,
+          updatedAt: now - 25 * 60 * 60_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 1 },
           metadata: {}
         })

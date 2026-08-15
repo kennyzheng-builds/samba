@@ -724,6 +724,11 @@ describe('JobManager pause / drainInFlight', () => {
         enabled: true,
         lastRun: now - 7_200_000,
         nextRun: now - 3_600_000,
+        // The fire two hours ago is what last wrote this row (markFired stamps
+        // updatedAt). Overdue detection reads that boundary to tell a fire
+        // lost to a closed app from one suppressed by a later pause / edit.
+        createdAt: now - 7_200_000,
+        updatedAt: now - 7_200_000,
         catchUpPolicy: catchUp,
         metadata: {}
       })
@@ -992,6 +997,7 @@ describe('JobManager pause / drainInFlight', () => {
           enabled: true,
           lastRun: now - 3_600_000,
           nextRun: null,
+          updatedAt: now - 3_600_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 0 },
           metadata: {},
           // listEnabled orders by createdAt: pin S2 strictly after S1 so the

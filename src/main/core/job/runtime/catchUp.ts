@@ -46,6 +46,10 @@ export interface CatchUpAction {
  *   - once: never overdue here. A `once` trigger that already fired
  *     consumed itself; if it never fired, the SchedulerService timer will.
  *
+ * An expected fire older than the row's `updatedAt` is not treated as missed —
+ * it was suppressed by a pause / resume / trigger edit rather than lost. See
+ * `isScheduleOverdue`.
+ *
  * Catch-up policies:
  *   - skip-missed   : do NOT enqueue, but still emit missEvent (observability).
  *   - after-startup : enqueue once after `minutes * 60_000` ms; emit missEvent.
@@ -88,8 +92,15 @@ export function computeCatchUpAction(
 }
 
 /**
- * Per-trigger overdue rule. Separated out so the trigger-kind switch is one
- * place and computeCatchUpAction stays focused on policy.
+ * Overdue = the schedule owed a fire that never happened. Two conditions: the
+ * expected fire is in the past, AND it postdates the row's last modification.
+ *
+ * The second condition is what separates a lost fire from a suppressed one.
+ * `nextRun` / `lastRun` are only advanced by an actual fire, so pausing a
+ * schedule across its fire time (or editing its trigger) leaves an expected
+ * fire stranded in the past — and pause, resume and update all stamp
+ * `updatedAt`. Without the check, resuming a paused schedule would make up
+ * precisely the fire the pause existed to prevent.
  */
 function isScheduleOverdue(
   schedule: JobScheduleSnapshot,
@@ -97,24 +108,35 @@ function isScheduleOverdue(
   nowMs: number,
   projectNextRun?: CronProjector
 ): boolean {
+  const dueMs = expectedFireMs(schedule, lastRunMs, projectNextRun)
+  if (dueMs === null || dueMs > nowMs) return false
+  return dueMs >= Date.parse(schedule.updatedAt)
+}
+
+/**
+ * The fire this schedule should already have made, per trigger kind.
+ * Separated out so the trigger-kind switch is one place and the overdue rule
+ * above stays focused on lost-vs-suppressed.
+ */
+function expectedFireMs(
+  schedule: JobScheduleSnapshot,
+  lastRunMs: number | null,
+  projectNextRun?: CronProjector
+): number | null {
   const trigger = schedule.trigger
   if (trigger.kind === 'cron') {
-    const nextRunMs = schedule.nextRun ? Date.parse(schedule.nextRun) : null
-    if (nextRunMs !== null) return nextRunMs <= nowMs
+    if (schedule.nextRun) return Date.parse(schedule.nextRun)
     // Never fired — no persisted nextRun to compare against. Same anchor as
     // the interval branch: if the app had been running, the occurrence
     // following the anchor would have fired.
-    if (!projectNextRun) return false
-    const projected = projectNextRun(trigger, lastRunMs ?? Date.parse(schedule.createdAt))
-    return projected !== null && projected <= nowMs
+    return projectNextRun?.(trigger, lastRunMs ?? Date.parse(schedule.createdAt)) ?? null
   }
   if (trigger.kind === 'interval') {
     // Anchor: lastRun (if ever fired) else createdAt. Scheduler does not write
     // nextRun for non-cron triggers, so the anchor + ms math is the authority.
-    const anchorMs = lastRunMs ?? Date.parse(schedule.createdAt)
-    return anchorMs + trigger.ms <= nowMs
+    return (lastRunMs ?? Date.parse(schedule.createdAt)) + trigger.ms
   }
   // once: armed in SchedulerService via setTimeout. If it hasn't fired by now,
   // the timer is still pending — not overdue from catch-up's perspective.
-  return false
+  return null
 }
