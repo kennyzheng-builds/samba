@@ -677,6 +677,51 @@ describe('JobManager integration', () => {
     })
   })
 
+  describe('startup recovery — catch-up', () => {
+    const intervalNoopHandler: JobHandler = {
+      recovery: 'abandon',
+      defaultConcurrency: 1,
+      async execute() {
+        return {}
+      }
+    }
+
+    it('makes up an after-startup miss exactly once, not again on every restart', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.interval',
+          trigger: { kind: 'interval', ms: 60 * 60_000 },
+          jobInputTemplate: { message: 'missed-while-closed' },
+          enabled: true,
+          // Last fired three hours ago — the hourly fire was missed.
+          lastRun: now - 3 * 60 * 60_000,
+          nextRun: null,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const boot1 = await bootstrapManager({ handlers: [['task.interval', intervalNoopHandler]] })
+      await drainAllQueues(boot1.jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+
+      await teardownManager(boot1.scheduler, boot1.jobManager)
+
+      // Restart before the next natural fire: the miss is already consumed,
+      // so no second make-up job may appear.
+      const boot2 = await bootstrapManager({ handlers: [['task.interval', intervalNoopHandler]] })
+      await drainAllQueues(boot2.jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+
+      await teardownManager(boot2.scheduler, boot2.jobManager)
+    })
+  })
+
   describe('graceful shutdown', () => {
     it('aborts in-flight handlers and resolves the finished promise quickly', async () => {
       const { scheduler, jobManager } = await bootstrapManager({

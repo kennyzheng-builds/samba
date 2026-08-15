@@ -13,6 +13,7 @@ import { agentChannelService } from '@data/services/AgentChannelService'
 import { agentSessionService } from '@data/services/AgentSessionService'
 import { jobScheduleService } from '@data/services/JobScheduleService'
 import { JobManager } from '@main/core/job/JobManager'
+import { computeCatchUpAction } from '@main/core/job/runtime/catchUp'
 import type { JobHandler } from '@main/core/job/types'
 import { BaseService } from '@main/core/lifecycle/BaseService'
 import { SchedulerService } from '@main/core/scheduler/SchedulerService'
@@ -53,6 +54,15 @@ vi.mock('../agentTaskJobHandler', () => ({
 }))
 
 import { AgentJobsService } from '../AgentJobsService'
+
+// Stand-in for the registered handler in the catch-up decision — only its
+// `onMissed` presence matters to `computeCatchUpAction`.
+const catchUpHandler: JobHandler = {
+  recovery: 'retry',
+  async execute() {
+    return {}
+  }
+}
 
 const AGENT_ID = 'agent-1'
 const OTHER_AGENT_ID = 'agent-2'
@@ -228,6 +238,26 @@ describe('AgentJobsService', () => {
 
       expect(jobScheduleService.listAll({ type: 'agent.task' })).toHaveLength(0)
       expect(dbh.db.select().from(agentChannelTaskTable).all()).toHaveLength(0)
+    })
+
+    it('catches a fire missed while the app was closed up on the next startup', () => {
+      const task = service.createTask(AGENT_ID, form)
+      // App closed for 10 minutes; the 60 s interval fired nowhere.
+      jobScheduleService.markFired(task.id, Date.now() - 10 * 60_000, null)
+
+      const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
+
+      expect(action.shouldEnqueue).toBe(true)
+      expect(action.enqueueDelayMs).toBeLessThanOrEqual(5 * 60_000)
+    })
+
+    it('keeps a task whose interval has not elapsed out of the catch-up sweep', () => {
+      const task = service.createTask(AGENT_ID, form)
+      jobScheduleService.markFired(task.id, Date.now() - 10_000, null)
+
+      const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
+
+      expect(action.shouldEnqueue).toBe(false)
     })
   })
 

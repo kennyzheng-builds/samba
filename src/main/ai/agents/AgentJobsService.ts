@@ -3,6 +3,7 @@ import { agentChannelService } from '@data/services/AgentChannelService'
 import { agentService } from '@data/services/AgentService'
 import { agentSessionService } from '@data/services/AgentSessionService'
 import {
+  AGENT_TASK_CATCH_UP_POLICY,
   agentTaskService,
   normalizeTaskSessionReuseRevision,
   readTaskSessionReuse,
@@ -97,7 +98,7 @@ export class AgentJobsService extends BaseService {
           enabled: form.reuseSession === true,
           revision: 0
         }),
-        catchUpPolicy: { kind: 'skip-missed' }
+        catchUpPolicy: AGENT_TASK_CATCH_UP_POLICY
       })
       if (channelIds.length > 0) {
         agentChannelService.replaceTaskSubscriptionsTx(tx, created.id, channelIds)

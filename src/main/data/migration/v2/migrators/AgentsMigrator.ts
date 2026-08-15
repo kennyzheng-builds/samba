@@ -10,6 +10,7 @@ import { agentWorkspaceTable } from '@data/db/schemas/agentWorkspace'
 import { agentMcpServerTable } from '@data/db/schemas/assistantRelations'
 import { jobScheduleTable } from '@data/db/schemas/job'
 import type { DbType } from '@data/db/types'
+import { AGENT_TASK_CATCH_UP_POLICY } from '@data/services/AgentTaskService'
 import { agentWorkspaceService } from '@data/services/AgentWorkspaceService'
 import { loggerService } from '@logger'
 import type { Trigger } from '@shared/data/api/schemas/jobs'
@@ -755,7 +756,7 @@ export class AgentsMigrator extends BaseMigrator {
             timeoutMinutes: v1.timeout_minutes ?? 2,
             workspace: { type: 'system' }
           },
-          catchUpPolicy: { kind: 'skip-missed' },
+          catchUpPolicy: AGENT_TASK_CATCH_UP_POLICY,
           enabled: v1.status === 'active',
           metadata: { migratedFrom: 'v1.agentTask', v1Id: v1.id }
         })

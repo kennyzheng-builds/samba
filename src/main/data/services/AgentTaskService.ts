@@ -21,11 +21,20 @@ import {
   AgentSessionWorkspaceSourceSchema,
   type AgentWorkspaceReferenceItem
 } from '@shared/data/api/schemas/agentWorkspaces'
-import type { JobScheduleSnapshot, JobSnapshot } from '@shared/data/api/schemas/jobs'
+import type { CatchUpPolicy, JobScheduleSnapshot, JobSnapshot } from '@shared/data/api/schemas/jobs'
 import type { ListOptions } from '@shared/data/api/types'
 
 const AGENT_TASK_TYPE = 'agent.task' as const
 const HEARTBEAT_TASK_NAME = 'heartbeat'
+
+/**
+ * Catch-up policy every `agent.task` schedule is created with — by both the
+ * write path (`AgentJobsService.createTask`) and the v1→v2 migrator. A task
+ * whose fire was missed while the app was closed runs once shortly after the
+ * next startup instead of being dropped, matching v1's polling behaviour. The
+ * delay stacks on JobManager's own startup quiet window.
+ */
+export const AGENT_TASK_CATCH_UP_POLICY: CatchUpPolicy = { kind: 'after-startup', minutes: 1 }
 
 type AgentTaskJobInputTemplate = {
   agentId: string

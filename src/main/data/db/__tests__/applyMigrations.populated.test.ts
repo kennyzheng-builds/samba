@@ -323,8 +323,38 @@ describe('applyMigrations over a populated database', () => {
     expect(sqlite.pragma('foreign_key_check')).toEqual([])
   })
 
+  it('lifts existing agent tasks onto the after-startup catch-up policy, leaving other job types alone', () => {
+    applyMigrations(db, baselineMigrationsFolder(join(tempDir, 'baseline'), '0008_agent_task_catch_up'))
+    const now = Date.now()
+    const trigger = JSON.stringify({ kind: 'interval', ms: 60_000 })
+    const template = JSON.stringify({ agentId: 'agent-catch-up', prompt: 'test', timeoutMinutes: 0 })
+    for (const [id, type] of [
+      ['schedule-agent-task', 'agent.task'],
+      ['schedule-other-type', 'other.type']
+    ]) {
+      sqlite
+        .prepare(
+          `INSERT INTO job_schedule
+            (id, type, trigger, job_input_template, enabled, catch_up_policy, metadata, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 1, '{"kind":"skip-missed"}', '{}', ?, ?)`
+        )
+        .run(id, type, trigger, template, now, now)
+    }
+
+    applyMigrations(db, resolveMigrationsPath())
+
+    const rows = sqlite.prepare(`SELECT id, catch_up_policy FROM job_schedule ORDER BY id`).all() as Array<{
+      id: string
+      catch_up_policy: string
+    }>
+    expect(rows.map((row) => [row.id, JSON.parse(row.catch_up_policy)])).toEqual([
+      ['schedule-agent-task', { kind: 'after-startup', minutes: 1 }],
+      ['schedule-other-type', { kind: 'skip-missed' }]
+    ])
+  })
+
   it('backfills conversation activity from message phases without losing populated rows', () => {
-    applyMigrations(db, baselineMigrationsFolder(join(tempDir, 'baseline')))
+    applyMigrations(db, baselineMigrationsFolder(join(tempDir, 'baseline'), '0007_flimsy_mentor'))
 
     sqlite
       .prepare(

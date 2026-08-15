@@ -386,11 +386,10 @@ export class JobManager extends BaseService {
    * STARTED catch-up step (one schedule's onMissed + catch-up enqueue) is
    * atomic and runs to completion even if pause lands inside its awaited
    * `onMissed`; drainInFlight joins the flow, so that enqueue always lands
-   * before a drain verdict. `resume` re-enters from the cursor; completed
-   * catch-up steps are never re-run (`computeCatchUpAction` reads
-   * lastRun/nextRun, which catch-up enqueues do not update — a re-run would
-   * duplicate make-up jobs). Shutdown still wins over pause and leaves no
-   * replay debt.
+   * before a drain verdict. `resume` re-enters from the cursor so no step is
+   * re-run; a make-up enqueue also consumes its missed window by advancing
+   * lastRun, which `computeCatchUpAction` reads. Shutdown still wins over
+   * pause and leaves no replay debt.
    */
   private runStartupRecoveryFlow(resume?: RecoveryResumePoint): Promise<void> {
     // Wrapper only tracks the in-flight flag (release compensation reads it
@@ -2221,7 +2220,9 @@ export class JobManager extends BaseService {
    * whether each missed its expected fire window, and:
    *   - emit `onMissed` to the handler if defined (observability), AND
    *   - enqueue a make-up job if the schedule's `catchUpPolicy` requested it
-   *     (currently `after-startup` is the only enqueuing policy).
+   *     (currently `after-startup` is the only enqueuing policy), then mark
+   *     the missed window consumed so restarts before the next natural fire
+   *     do not enqueue it again.
    *
    * `skip-missed` still emits `onMissed` — handlers may use it for breaker
    * logic or telemetry even when no make-up job is wanted.
@@ -2261,6 +2262,10 @@ export class JobManager extends BaseService {
           scheduleId: schedule.id,
           scheduledAt
         })
+        // Consume the missed window: overdue detection reads lastRun/nextRun,
+        // so without this every restart before the next natural fire would
+        // enqueue another make-up job for the same miss.
+        jobScheduleService.markFired(schedule.id, nowMs, null)
         logger.info('Catch-up enqueued', { scheduleId: schedule.id, type: schedule.type, scheduledAt })
       }
     }
