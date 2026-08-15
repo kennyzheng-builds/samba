@@ -122,6 +122,7 @@ describe('useScrollPositionMemory', () => {
       return found ? Number(found[0]) : -1
     },
     shouldRestore: () => true,
+    isStreaming: false,
     isFollowing: () => following,
     enterFollowingAfterRestore,
     enterReadingForRestore,
@@ -163,6 +164,17 @@ describe('useScrollPositionMemory', () => {
     expect(enterReadingForRestore).toHaveBeenCalledTimes(1)
     expect(settleReadingRestore).toHaveBeenCalledTimes(1)
     expect(enterFollowingAfterRestore).not.toHaveBeenCalled()
+  })
+
+  it('follows the live edge instead of the saved anchor while the conversation is streaming', () => {
+    cacheService.set('chat.scroll_anchor.t1', { key: 'g0', offset: 80 })
+
+    renderHook(() => useScrollPositionMemory(buildInputs({ isStreaming: true })))
+    flushRaf()
+
+    expect(handle.scrollToIndex).toHaveBeenCalledWith(2, { align: 'end', offset: 24 })
+    expect(enterFollowingAfterRestore).toHaveBeenCalledTimes(1)
+    expect(enterReadingForRestore).not.toHaveBeenCalled()
   })
 
   it('follows the newest message via scrollToIndex(end) when nothing is saved', () => {

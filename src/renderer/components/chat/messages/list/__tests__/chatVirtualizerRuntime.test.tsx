@@ -1,3 +1,4 @@
+import { cacheService } from '@data/CacheService'
 import { act, render } from '@testing-library/react'
 import { type ReactNode, type Ref } from 'react'
 import type { VListHandle } from 'virtua'
@@ -19,6 +20,8 @@ interface RuntimeProbeProps {
   onReachTop?: () => void
   onRuntime(runtime: ChatVirtualizerRuntime<string>): void
   topPadding?: number
+  topicId?: string
+  isStreaming?: boolean
 }
 
 interface RuntimeDomProbeProps extends RuntimeProbeProps {
@@ -58,7 +61,9 @@ function RuntimeDomProbe({
   nonce,
   onReachTop,
   onRuntime,
-  topPadding
+  topPadding,
+  topicId,
+  isStreaming
 }: RuntimeDomProbeProps) {
   void nonce
   const runtime = useChatVirtualizerRuntime({
@@ -70,6 +75,8 @@ function RuntimeDomProbe({
     keepMountedKeys,
     onReachTop,
     topPadding,
+    topicId,
+    isStreaming,
     topReachOverscanItems: 4,
     bottomPadding: 12
   })
@@ -1248,6 +1255,65 @@ describe('useChatVirtualizerRuntime', () => {
 
       raf.tick(50)
       expect(scrollTop).toBe(800)
+    } finally {
+      raf.restore()
+    }
+  })
+
+  it('restores a still-streaming conversation to the live edge instead of its saved anchor', () => {
+    const raf = installQueuedAnimationFrame()
+    cacheService.set('chat.scroll_anchor.session-live', { key: 'message-a', offset: 40 })
+
+    try {
+      let runtime: ChatVirtualizerRuntime<string> | undefined
+      let handle: MessageVirtualListHandle | null = null
+      const handleRef: Ref<MessageVirtualListHandle> = (nextHandle) => {
+        handle = nextHandle
+      }
+      render(
+        <RuntimeDomProbe
+          items={['message-a', 'message-b']}
+          handleRef={handleRef}
+          topicId="session-live"
+          isStreaming
+          onRuntime={(nextRuntime) => (runtime = nextRuntime)}
+        />
+      )
+      const vlistHandle = createHandle()
+      runtime!.vlistHandleRef.current = vlistHandle
+      raf.tick(2)
+
+      expect(vlistHandle.scrollToIndex).toHaveBeenCalledWith(1, { align: 'end', offset: 12 })
+      expect(handle!.isFollowing()).toBe(true)
+    } finally {
+      raf.restore()
+    }
+  })
+
+  it('restores the saved anchor of a conversation that is no longer streaming', () => {
+    const raf = installQueuedAnimationFrame()
+    cacheService.set('chat.scroll_anchor.session-idle', { key: 'message-a', offset: 40 })
+
+    try {
+      let runtime: ChatVirtualizerRuntime<string> | undefined
+      let handle: MessageVirtualListHandle | null = null
+      const handleRef: Ref<MessageVirtualListHandle> = (nextHandle) => {
+        handle = nextHandle
+      }
+      render(
+        <RuntimeDomProbe
+          items={['message-a', 'message-b']}
+          handleRef={handleRef}
+          topicId="session-idle"
+          onRuntime={(nextRuntime) => (runtime = nextRuntime)}
+        />
+      )
+      const vlistHandle = createHandle()
+      runtime!.vlistHandleRef.current = vlistHandle
+      raf.tick(2)
+
+      expect(vlistHandle.scrollToIndex).toHaveBeenCalledWith(0, { align: 'start', offset: 40 })
+      expect(handle!.isFollowing()).toBe(false)
     } finally {
       raf.restore()
     }

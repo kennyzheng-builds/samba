@@ -99,6 +99,11 @@ export interface MessageVirtualListProps<T> {
    * across remounts (topic / agent-session switches).
    */
   topicId?: string
+  /**
+   * Whether this conversation is producing output right now. A remount then
+   * restores to the live edge instead of the saved reading anchor.
+   */
+  isStreaming?: boolean
 }
 
 export function MessageVirtualList<T>({
@@ -118,7 +123,8 @@ export function MessageVirtualList<T>({
   keepMountedKeys,
   showScrollToBottomButton = false,
   scrollToBottomButtonBottomOffset = MESSAGE_SCROLL_TO_BOTTOM_BUTTON_DEFAULT_BOTTOM_OFFSET_PX,
-  topicId
+  topicId,
+  isStreaming = false
 }: MessageVirtualListProps<T>): React.ReactElement {
   const { t } = useTranslation()
   const runtime = useChatVirtualizerRuntime({
@@ -131,6 +137,7 @@ export function MessageVirtualList<T>({
     topReachOverscanItems: overscan,
     topPadding,
     topicId,
+    isStreaming,
     bottomPadding,
     keepMountedKeys
   })

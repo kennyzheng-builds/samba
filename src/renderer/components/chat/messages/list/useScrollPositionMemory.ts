@@ -104,6 +104,8 @@ export interface ScrollPositionMemoryInputs {
   findDataIndexByKey: (key: string) => number
   /** Whether the mount-time restore still owns the viewport. */
   shouldRestore: () => boolean
+  /** Whether this conversation is producing output right now. */
+  isStreaming: boolean
   isFollowing: () => boolean
   enterFollowingAfterRestore: () => void
   enterReadingForRestore: () => void
@@ -163,16 +165,17 @@ export function useScrollPositionMemory(inputs: ScrollPositionMemoryInputs): Scr
     if (didRestoreRef.current || !ready) return
     didRestoreRef.current = true
 
-    const i = inputsRef.current
-    const saved = i.topicId ? cacheService.get(cacheKeyFor(i.topicId)) : null
-    const target = resolveRestoreTarget(saved, i.findDataIndexByKey, i.itemCount - 1, i.bottomPadding)
-
     let settleRaf = 0
     const raf = requestAnimationFrame(() => {
+      const i = inputsRef.current
       if (!i.shouldRestore()) {
         suppressSaveRef.current = false
         return
       }
+      // A turn still running is what the user came back for; the saved anchor
+      // is where they left off, not where the work is.
+      const saved = i.topicId && !i.isStreaming ? cacheService.get(cacheKeyFor(i.topicId)) : null
+      const target = resolveRestoreTarget(saved, i.findDataIndexByKey, i.itemCount - 1, i.bottomPadding)
       const el = i.scrollerRef.current
       const handle = i.vlistHandleRef.current
       if (target.align === 'end') i.enterFollowingAfterRestore()

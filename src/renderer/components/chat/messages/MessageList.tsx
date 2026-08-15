@@ -764,6 +764,7 @@ const MessageList = ({ enableSearch = false }: MessageListProps) => {
             showScrollToBottomButton
             scrollToBottomButtonBottomOffset={Math.max(24, bottomPadding)}
             topicId={topic.id}
+            isStreaming={liveMessageIds.length > 0}
             hasMoreTop={hasOlder}
             onScrollContainerReady={handleScrollContainerReady}
             onReachTop={loadMoreMessages}

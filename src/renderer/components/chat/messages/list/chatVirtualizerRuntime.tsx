@@ -68,6 +68,11 @@ export interface ChatVirtualizerRuntimeOptions<T> {
    * across remounts (topic / agent-session switches). Omit to disable.
    */
   topicId?: string
+  /**
+   * Whether this conversation is producing output right now. A remount then
+   * restores to the live edge instead of the saved reading anchor.
+   */
+  isStreaming?: boolean
   /** Padding reserved below the last message; used to restore to the bottom. */
   bottomPadding: number
   /** Stable item keys that must survive virtualization while they own live UI state. */
@@ -169,6 +174,7 @@ export function useChatVirtualizerRuntime<T>({
   topReachOverscanItems,
   topPadding = 0,
   topicId,
+  isStreaming = false,
   bottomPadding,
   keepMountedKeys = []
 }: ChatVirtualizerRuntimeOptions<T>): ChatVirtualizerRuntime<T> {
@@ -503,6 +509,7 @@ export function useChatVirtualizerRuntime<T>({
     getDataKeyAtIndex,
     findDataIndexByKey,
     shouldRestore: () => viewportFollow.getState().reason === 'initializing',
+    isStreaming,
     isFollowing: viewportFollow.isFollowing,
     enterFollowingAfterRestore,
     enterReadingForRestore,
