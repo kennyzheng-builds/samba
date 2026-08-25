@@ -348,8 +348,6 @@ vi.mock('react-i18next', () => ({
         if (key === 'chat.topics.display.assistant') return 'Assistant'
         if (key === 'chat.topics.draft') return 'Draft'
         if (key === 'chat.topics.group.today') return 'Today'
-        if (key === 'chat.topics.group.yesterday') return 'Yesterday'
-        if (key === 'chat.topics.group.this_week') return 'This week'
         if (key === 'chat.topics.group.earlier') return 'Earlier'
         if (key === 'chat.topics.group.unknown_assistant') return 'Unlinked Assistant'
         if (key === 'chat.topics.group.show_more') return 'Show more conversations'
@@ -478,13 +476,7 @@ const TOPIC_EXPANSION_ASSISTANT_KEY = 'ui.topic.expansion.assistant'
 
 // The full set of collapsible time groups; the stored cache is a flat list of
 // the ones the user explicitly collapsed (denylist). Empty = everything expanded.
-const ALL_TOPIC_TIME_GROUP_IDS = [
-  TOPIC_PINNED_GROUP_ID,
-  'topic:time:today',
-  'topic:time:yesterday',
-  'topic:time:this-week',
-  'topic:time:earlier'
-]
+const ALL_TOPIC_TIME_GROUP_IDS = [TOPIC_PINNED_GROUP_ID, 'topic:time:today', 'topic:time:earlier']
 
 type TopicGroupCollapseFixture = {
   time: string[]
@@ -987,8 +979,6 @@ describe('Topics', () => {
 
     expect(screen.getByText('Pinned')).toBeInTheDocument()
     expect(screen.getByText('Today')).toBeInTheDocument()
-    expect(screen.getByText('Yesterday')).toBeInTheDocument()
-    expect(screen.getByText('This week')).toBeInTheDocument()
     expect(screen.getByText('Earlier')).toBeInTheDocument()
     expect(screen.getByText('Beta pinned')).toBeInTheDocument()
     const pinnedRow = getByText('Beta pinned').closest('[data-testid="topic-list-row"]')
@@ -2716,13 +2706,7 @@ describe('Topics', () => {
     const { rerenderTopicList } = renderTopicList()
 
     const groupButtons = screen.getAllByRole('button', { expanded: true })
-    expect(groupButtons.map((button) => button.textContent)).toEqual([
-      'Pinned',
-      'Today',
-      'Yesterday',
-      'This week',
-      'Earlier'
-    ])
+    expect(groupButtons.map((button) => button.textContent)).toEqual(['Pinned', 'Today', 'Earlier'])
 
     fireEvent.click(screen.getByRole('button', { name: 'Pinned' }))
     rerenderTopicList()
@@ -2787,7 +2771,7 @@ describe('Topics', () => {
   it('only expands the active assistant topic group when switching to assistant display mode from the menu', async () => {
     MockUsePreferenceUtils.setPreferenceValue('topic.tab.display_mode' as never, 'time')
     setTopicGroupExpansionCache({
-      time: ['topic:time:yesterday'],
+      time: ['topic:time:earlier'],
       assistant: ['topic:assistant:assistant-1']
     })
     mockUseInfiniteQuery.mockReturnValue({
@@ -2825,7 +2809,7 @@ describe('Topics', () => {
         expect.arrayContaining(['topic:assistant:unknown', 'topic:assistant:assistant-2'])
       )
     })
-    expect(getTopicGroupExpansionCache().time).toEqual(['topic:time:yesterday'])
+    expect(getTopicGroupExpansionCache().time).toEqual(['topic:time:earlier'])
   })
 
   it('shows the first assistant topic page while the remaining pages load', () => {
@@ -2925,7 +2909,7 @@ describe('Topics', () => {
     MockUsePreferenceUtils.setPreferenceValue('topic.tab.display_mode' as never, 'time')
     renderTopicList()
 
-    for (const groupName of ['Pinned', 'Today', 'Yesterday', 'This week', 'Earlier'] as const) {
+    for (const groupName of ['Pinned', 'Today', 'Earlier'] as const) {
       const header = screen.getByRole('button', { name: groupName }).closest('div')
       expect(header).toBeInTheDocument()
       expect(

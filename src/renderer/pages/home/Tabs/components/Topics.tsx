@@ -731,8 +731,6 @@ export function Topics({
           pinned: t('selector.common.pinned_title'),
           time: {
             today: t('chat.topics.group.today'),
-            yesterday: t('chat.topics.group.yesterday'),
-            'this-week': t('chat.topics.group.this_week'),
             earlier: t('chat.topics.group.earlier')
           },
           assistant: {

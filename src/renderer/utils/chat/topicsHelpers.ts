@@ -59,9 +59,7 @@ export type TopicListItem = Topic & {
 
 const TOPIC_TIME_BUCKET_RANK: Record<ResourceListTimeBucket, number> = {
   today: 1,
-  yesterday: 2,
-  'this-week': 3,
-  earlier: 4
+  earlier: 2
 }
 
 export const TOPIC_PINNED_GROUP_ID = 'topic:pinned'

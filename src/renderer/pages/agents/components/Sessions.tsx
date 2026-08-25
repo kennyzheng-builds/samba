@@ -663,8 +663,6 @@ const Sessions = ({
           pinned: t('selector.common.pinned_title'),
           time: {
             today: t('agent.session.group.today'),
-            yesterday: t('agent.session.group.yesterday'),
-            'this-week': t('agent.session.group.this_week'),
             earlier: t('agent.session.group.earlier')
           },
           agent: {

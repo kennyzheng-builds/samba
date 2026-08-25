@@ -41,10 +41,10 @@ describe('sortResourceItemsByPinnedTime', () => {
     const items: TestItem[] = [
       { id: 'invalid', lastActivityAt: 'not-a-date' },
       { id: 'empty', lastActivityAt: '' },
-      { id: 'yesterday', lastActivityAt: localIso(2026, 5, 14, 9) }
+      { id: 'today', lastActivityAt: localIso(2026, 5, 15, 9) }
     ]
 
-    expect(sortResourceItemsByPinnedTime(items, now).map((item) => item.id)).toEqual(['yesterday', 'invalid', 'empty'])
+    expect(sortResourceItemsByPinnedTime(items, now).map((item) => item.id)).toEqual(['today', 'invalid', 'empty'])
   })
 
   it('keeps empty arrays and equal timestamps stable', () => {

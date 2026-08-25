@@ -6,7 +6,7 @@ export type ResourceListGroup = {
   count?: number
 }
 
-export type ResourceListTimeBucket = 'today' | 'yesterday' | 'this-week' | 'earlier'
+export type ResourceListTimeBucket = 'today' | 'earlier'
 
 export type ResourceListGroupResolver<T> = (item: T) => ResourceListGroup | null
 
@@ -45,24 +45,7 @@ export function getResourceTimeBucket(timestamp: TimestampInput, now?: Timestamp
     return 'earlier'
   }
 
-  const itemStart = item.startOf('day')
-  const todayStart = current.startOf('day')
-
-  if (itemStart.isSame(todayStart)) {
-    return 'today'
-  }
-
-  const yesterdayStart = todayStart.subtract(1, 'day')
-  if (itemStart.isSame(yesterdayStart)) {
-    return 'yesterday'
-  }
-
-  const weekStart = todayStart.startOf('week')
-  if (itemStart.isSame(weekStart) || (itemStart.isAfter(weekStart) && itemStart.isBefore(yesterdayStart))) {
-    return 'this-week'
-  }
-
-  return 'earlier'
+  return item.startOf('day').isSame(current.startOf('day')) ? 'today' : 'earlier'
 }
 
 export function composeResourceListGroupResolvers<T>(

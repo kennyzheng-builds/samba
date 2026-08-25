@@ -20,8 +20,6 @@ const TOPIC_GROUP_LABELS = {
   pinned: 'Pinned',
   time: {
     today: 'Today',
-    yesterday: 'Yesterday',
-    'this-week': 'This week',
     earlier: 'Earlier'
   },
   assistant: {
@@ -171,9 +169,8 @@ describe('Topics helpers', () => {
   it('classifies topic lastActivityAt values into reusable time buckets', () => {
     const now = new Date(2026, 4, 15, 12)
 
-    expect(getTopicTimeBucket(localIso(2026, 5, 15, 9), now)).toBe('today')
-    expect(getTopicTimeBucket(localIso(2026, 5, 14, 9), now)).toBe('yesterday')
-    expect(getTopicTimeBucket(localIso(2026, 5, 13, 9), now)).toBe('this-week')
+    expect(getTopicTimeBucket(localIso(2026, 5, 15, 0), now)).toBe('today')
+    expect(getTopicTimeBucket(localIso(2026, 5, 14, 23), now)).toBe('earlier')
     expect(getTopicTimeBucket(localIso(2026, 5, 8, 23), now)).toBe('earlier')
   })
 
@@ -190,12 +187,8 @@ describe('Topics helpers', () => {
       label: 'Today'
     })
     expect(groupTopic(createTopic({ id: 'yesterday', lastActivityAt: localIso(2026, 5, 14, 9) }))).toEqual({
-      id: 'topic:time:yesterday',
-      label: 'Yesterday'
-    })
-    expect(groupTopic(createTopic({ id: 'week', lastActivityAt: localIso(2026, 5, 13, 9) }))).toEqual({
-      id: 'topic:time:this-week',
-      label: 'This week'
+      id: 'topic:time:earlier',
+      label: 'Earlier'
     })
     expect(groupTopic(createTopic({ id: 'earlier', lastActivityAt: localIso(2026, 5, 8, 23) }))).toEqual({
       id: 'topic:time:earlier',

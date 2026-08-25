@@ -24,8 +24,6 @@ const SESSION_GROUP_LABELS = {
   pinned: 'Pinned',
   time: {
     today: 'Today',
-    yesterday: 'Yesterday',
-    'this-week': 'This week',
     earlier: 'Earlier'
   },
   agent: {

@@ -7,9 +7,7 @@ import {
 
 const RESOURCE_TIME_BUCKET_RANK: Record<ResourceListTimeBucket, number> = {
   today: 1,
-  yesterday: 2,
-  'this-week': 3,
-  earlier: 4
+  earlier: 2
 }
 
 export function sortResourceItemsByPinnedTime<T extends { lastActivityAt: string; pinned?: boolean }>(

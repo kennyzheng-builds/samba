@@ -23,12 +23,12 @@ function localIso(year: number, month: number, day: number, hour = 12) {
 }
 
 describe('resourceListGrouping', () => {
-  it('classifies timestamps into today, yesterday, this-week, and earlier buckets', () => {
+  it('classifies timestamps into today and earlier buckets by local day', () => {
     const now = new Date(2026, 4, 15, 12)
 
-    expect(getResourceTimeBucket(localIso(2026, 5, 15, 9), now)).toBe('today')
-    expect(getResourceTimeBucket(localIso(2026, 5, 14, 9), now)).toBe('yesterday')
-    expect(getResourceTimeBucket(localIso(2026, 5, 13, 9), now)).toBe('this-week')
+    expect(getResourceTimeBucket(localIso(2026, 5, 15, 0), now)).toBe('today')
+    expect(getResourceTimeBucket(localIso(2026, 5, 15, 23), now)).toBe('today')
+    expect(getResourceTimeBucket(localIso(2026, 5, 14, 23), now)).toBe('earlier')
     expect(getResourceTimeBucket(localIso(2026, 5, 8, 23), now)).toBe('earlier')
   })
 
@@ -43,8 +43,6 @@ describe('resourceListGrouping', () => {
         getTimestamp: (item) => item.updatedAt,
         labels: {
           today: 'Today',
-          yesterday: 'Yesterday',
-          'this-week': 'This week',
           earlier: 'Earlier'
         },
         now
@@ -60,12 +58,8 @@ describe('resourceListGrouping', () => {
       label: 'Today'
     })
     expect(resolver({ id: 'yesterday', updatedAt: localIso(2026, 5, 14, 9) })).toEqual({
-      id: 'time:yesterday',
-      label: 'Yesterday'
-    })
-    expect(resolver({ id: 'week', updatedAt: localIso(2026, 5, 13, 9) })).toEqual({
-      id: 'time:this-week',
-      label: 'This week'
+      id: 'time:earlier',
+      label: 'Earlier'
     })
     expect(resolver({ id: 'earlier', updatedAt: localIso(2026, 5, 8, 23) })).toEqual({
       id: 'time:earlier',

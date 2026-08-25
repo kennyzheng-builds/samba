@@ -25,11 +25,15 @@ describe('useDayBoundaryNow', () => {
       vi.advanceTimersByTime(2 * DAY_MS)
     })
     const createdToday = new Date()
+    const createdTwoDaysAgo = new Date(2026, 0, 10, 10, 0, 0)
 
-    // A `now` frozen at mount time buckets today's item as "earlier" — the bug this hook fixes.
+    // A `now` frozen at mount time swaps the two buckets — today's item drops to "earlier" while a
+    // two-day-old one is labelled "today". That pair is exactly what users reported.
     expect(getResourceTimeBucket(createdToday, nowAtMount)).toBe('earlier')
+    expect(getResourceTimeBucket(createdTwoDaysAgo, nowAtMount)).toBe('today')
+
     expect(getResourceTimeBucket(createdToday, result.current)).toBe('today')
-    expect(getResourceTimeBucket(new Date(2026, 0, 11, 10, 0, 0), result.current)).toBe('yesterday')
+    expect(getResourceTimeBucket(createdTwoDaysAgo, result.current)).toBe('earlier')
   })
 
   it('keeps the same reference while the local day does not change', () => {
