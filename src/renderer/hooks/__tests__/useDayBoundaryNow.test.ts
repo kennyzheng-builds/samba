@@ -61,6 +61,22 @@ describe('useDayBoundaryNow', () => {
     expect(getResourceTimeBucket(new Date(), result.current)).toBe('today')
   })
 
+  it('re-groups after a timezone change that leaves the local date untouched', () => {
+    const offset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
+    const { result } = renderHook(() => useDayBoundaryNow())
+    const nowAtMount = result.current
+
+    // Flying UTC+8 -> UTC+0 within the same local date: the day comparison cannot see this, but the UTC
+    // timestamps being bucketed did move.
+    offset.mockReturnValue(0)
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    expect(result.current).not.toBe(nowAtMount)
+    offset.mockRestore()
+  })
+
   it('stops scheduling day rollovers once unmounted', () => {
     const timersBeforeMount = vi.getTimerCount()
     const { unmount } = renderHook(() => useDayBoundaryNow())
