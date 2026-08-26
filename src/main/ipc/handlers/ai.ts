@@ -243,7 +243,7 @@ export const aiHandlers: IpcHandlersFor<typeof aiRequestSchemas> = {
     return paused
   },
   'ai.agent.task.resume': async ({ agentId, taskId }) => {
-    const resumed = application.get('AgentJobsService').resumeTask(agentId, taskId)
+    const resumed = await application.get('AgentJobsService').resumeTask(agentId, taskId)
     if (!resumed) throw agentTaskNotFound(taskId)
     return resumed
   },

@@ -195,13 +195,13 @@ export class AgentJobsService extends BaseService {
     return agentTaskService.getTask(agentId, taskId)
   }
 
-  resumeTask(agentId: string, taskId: string): ScheduledTaskEntity | null {
+  async resumeTask(agentId: string, taskId: string): Promise<ScheduledTaskEntity | null> {
     const existing = agentTaskService.getTask(agentId, taskId)
     if (!existing) return null
     // State-aware no-op: resuming an already-enabled task would re-register
     // the SchedulerService timer and reset an interval's phase.
     if (existing.enabled) return existing
-    application.get('JobManager').resumeJobScheduleById(taskId)
+    await application.get('JobManager').resumeJobScheduleById(taskId)
     logger.info('Task resumed', { taskId, agentId })
     return agentTaskService.getTask(agentId, taskId)
   }

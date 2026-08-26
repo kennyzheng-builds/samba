@@ -92,7 +92,7 @@ describe('JobManager schedule control APIs', () => {
         case 'JobManager':
           return jobManager
         case 'PowerService':
-          return { preventSleep: () => ({ dispose: () => {} }) }
+          return { preventSleep: () => ({ dispose: () => {} }), onResume: () => ({ dispose: () => {} }) }
       }
       throw new Error(`Unexpected application.get('${name}')`)
     })
@@ -159,8 +159,8 @@ describe('JobManager schedule control APIs', () => {
         catchUpPolicy: { kind: 'skip-missed' }
       })
 
-      expect(jobManager.resumeJobScheduleById(snap.id)).toBe(true)
-      expect(jobManager.resumeJobScheduleById('does-not-exist')).toBe(false)
+      expect(await jobManager.resumeJobScheduleById(snap.id)).toBe(true)
+      expect(await jobManager.resumeJobScheduleById('does-not-exist')).toBe(false)
     })
 
     it('unregisterJobScheduleById returns true for existing, false for missing', async () => {

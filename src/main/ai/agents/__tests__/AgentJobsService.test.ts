@@ -13,6 +13,7 @@ import { jobScheduleTable } from '@data/db/schemas/job'
 import { agentChannelService } from '@data/services/AgentChannelService'
 import { agentSessionService } from '@data/services/AgentSessionService'
 import { jobScheduleService } from '@data/services/JobScheduleService'
+import { jobService } from '@data/services/JobService'
 import { JobManager } from '@main/core/job/JobManager'
 import { computeCatchUpAction } from '@main/core/job/runtime/catchUp'
 import type { JobHandler } from '@main/core/job/types'
@@ -150,7 +151,7 @@ describe('AgentJobsService', () => {
         case 'JobManager':
           return jobManager
         case 'PowerService':
-          return { preventSleep: () => ({ dispose: () => {} }) }
+          return { preventSleep: () => ({ dispose: () => {} }), onResume: () => ({ dispose: () => {} }) }
       }
       throw new Error(`Unexpected application.get('${name}')`)
     })
@@ -272,17 +273,22 @@ describe('AgentJobsService', () => {
       expect(action.shouldEnqueue).toBe(false)
     })
 
-    it('leaves a fire that fell inside a pause out of the catch-up sweep after resume', async () => {
+    it('makes up a fire missed while the task was paused, once, on resume', async () => {
       const task = service.createTask(AGENT_ID, form)
-      backdateLastFire(task.id, Date.now() - 10 * 60_000)
-      // Pause and resume both stamp updatedAt, marking the stranded fire as
-      // suppressed on purpose rather than lost to a closed app.
       await service.pauseTask(AGENT_ID, task.id)
-      service.resumeTask(AGENT_ID, task.id)
+      // Paused for 10 minutes; the 60 s interval fired nowhere in between.
+      backdateLastFire(task.id, Date.now() - 10 * 60_000)
 
-      const action = computeCatchUpAction(jobScheduleService.getById(task.id)!, catchUpHandler, Date.now())
+      await service.resumeTask(AGENT_ID, task.id)
 
-      expect(action.shouldEnqueue).toBe(false)
+      expect(jobService.list({ scheduleId: task.id })).toHaveLength(1)
+
+      // The make-up consumed the miss, so pausing and resuming again — with no
+      // fire owed this time — must not run the agent a second time.
+      await service.pauseTask(AGENT_ID, task.id)
+      await service.resumeTask(AGENT_ID, task.id)
+
+      expect(jobService.list({ scheduleId: task.id })).toHaveLength(1)
     })
   })
 
@@ -588,7 +594,7 @@ describe('AgentJobsService', () => {
       expect(paused?.enabled).toBe(false)
       expect(scheduler.has(`schedule:${task.id}`)).toBe(false)
 
-      const resumed = service.resumeTask(AGENT_ID, task.id)
+      const resumed = await service.resumeTask(AGENT_ID, task.id)
       expect(resumed?.enabled).toBe(true)
       expect(scheduler.has(`schedule:${task.id}`)).toBe(true)
     })
@@ -607,13 +613,13 @@ describe('AgentJobsService', () => {
       setEnabledSpy.mockRestore()
     })
 
-    it('a repeated resume neither re-registers the timer nor resets the interval phase', () => {
+    it('a repeated resume neither re-registers the timer nor resets the interval phase', async () => {
       const task = service.createTask(AGENT_ID, form)
       const originalEntry = getIntervalEntry(task.id)
       const updatedAtBefore = jobScheduleService.getById(task.id)?.updatedAt
       const registerSpy = vi.spyOn(scheduler, 'registerSchedule')
 
-      const again = service.resumeTask(AGENT_ID, task.id)
+      const again = await service.resumeTask(AGENT_ID, task.id)
 
       expect(again?.enabled).toBe(true)
       expect(registerSpy).not.toHaveBeenCalled()
@@ -631,7 +637,7 @@ describe('AgentJobsService', () => {
       })
 
       expect(await service.pauseTask(AGENT_ID, foreign.id)).toBeNull()
-      expect(service.resumeTask(AGENT_ID, foreign.id)).toBeNull()
+      expect(await service.resumeTask(AGENT_ID, foreign.id)).toBeNull()
       expect(jobScheduleService.getById(foreign.id)?.enabled).toBe(true)
     })
   })

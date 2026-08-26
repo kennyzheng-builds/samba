@@ -46,10 +46,6 @@ export interface CatchUpAction {
  *   - once: never overdue here. A `once` trigger that already fired
  *     consumed itself; if it never fired, the SchedulerService timer will.
  *
- * An expected fire older than the row's `updatedAt` is not treated as missed —
- * it was suppressed by a pause / resume / trigger edit rather than lost. See
- * `isScheduleOverdue`.
- *
  * Catch-up policies:
  *   - skip-missed   : do NOT enqueue, but still emit missEvent (observability).
  *   - after-startup : enqueue once after `minutes * 60_000` ms; emit missEvent.
@@ -92,15 +88,14 @@ export function computeCatchUpAction(
 }
 
 /**
- * Overdue = the schedule owed a fire that never happened. Two conditions: the
- * expected fire is in the past, AND it postdates the row's last modification.
+ * Overdue = the schedule owed a fire that has not happened and has not been
+ * made up. `lastRun` / `nextRun` advance only on a real fire or on a make-up
+ * (JobManager writes `markFired` for the fire it makes up), so an expected
+ * fire still sitting in the past is an unpaid debt.
  *
- * The second condition is what separates a lost fire from a suppressed one.
- * `nextRun` / `lastRun` are only advanced by an actual fire, so pausing a
- * schedule across its fire time (or editing its trigger) leaves an expected
- * fire stranded in the past — and pause, resume and update all stamp
- * `updatedAt`. Without the check, resuming a paused schedule would make up
- * precisely the fire the pause existed to prevent.
+ * A fire stranded by a pause counts as owed: pause is one of the three ways
+ * the reported regression loses a fire (app closed, machine asleep, task
+ * paused), and JobManager settles that debt on resume.
  */
 function isScheduleOverdue(
   schedule: JobScheduleSnapshot,
@@ -109,14 +104,13 @@ function isScheduleOverdue(
   projectNextRun?: CronProjector
 ): boolean {
   const dueMs = expectedFireMs(schedule, lastRunMs, projectNextRun)
-  if (dueMs === null || dueMs > nowMs) return false
-  return dueMs >= Date.parse(schedule.updatedAt)
+  return dueMs !== null && dueMs <= nowMs
 }
 
 /**
  * The fire this schedule should already have made, per trigger kind.
  * Separated out so the trigger-kind switch is one place and the overdue rule
- * above stays focused on lost-vs-suppressed.
+ * above stays focused on whether that fire is still owed.
  */
 function expectedFireMs(
   schedule: JobScheduleSnapshot,

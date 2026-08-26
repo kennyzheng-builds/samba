@@ -84,6 +84,17 @@ function makeSlowHandler(recovery: 'abandon' | 'retry' | 'singleton'): JobHandle
   }
 }
 
+/**
+ * Listeners JobManager registered on `PowerService.onResume`. Stands in for
+ * the machine waking up — the tests cannot actually suspend the process, so
+ * they move the clock and then deliver the event powerMonitor would.
+ */
+const resumeListeners = new Set<() => void>()
+
+function wakeFromSleep(): void {
+  for (const listener of [...resumeListeners]) listener()
+}
+
 // Local alias so test bodies read naturally; implementation in _helpers.ts.
 async function drainAllQueues(jm: JobManager): Promise<void> {
   return drainTrailingDispatch(jm)
@@ -129,7 +140,13 @@ async function bootstrapManager(opts: BootstrapOptions = {}): Promise<{
       case 'JobManager':
         return jobManager
       case 'PowerService':
-        return { preventSleep: () => ({ dispose: () => {} }) }
+        return {
+          preventSleep: () => ({ dispose: () => {} }),
+          onResume: (listener: () => void) => {
+            resumeListeners.add(listener)
+            return { dispose: () => resumeListeners.delete(listener) }
+          }
+        }
     }
     throw new Error(`Unexpected application.get('${name}')`)
   })
@@ -696,12 +713,9 @@ describe('JobManager integration', () => {
           trigger: { kind: 'interval', ms: 60 * 60_000 },
           jobInputTemplate: { message: 'missed-while-closed' },
           enabled: true,
-          // Last fired three hours ago — the hourly fire was missed. The fire
-          // is also what last wrote the row, as markFired stamps updatedAt.
+          // Last fired three hours ago — the hourly fire was missed.
           lastRun: now - 3 * 60 * 60_000,
           nextRun: null,
-          createdAt: now - 24 * 60 * 60_000,
-          updatedAt: now - 3 * 60 * 60_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 1 },
           metadata: {}
         })
@@ -784,7 +798,7 @@ describe('JobManager integration', () => {
       await teardownManager(scheduler, jobManager)
     })
 
-    it('does not make up a fire that fell inside a pause the user has since lifted', async () => {
+    it('makes up a fire that fell inside a pause the user has since lifted', async () => {
       const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
       const now = Date.now()
       const farHour = (new Date(now).getHours() + 12) % 24
@@ -799,7 +813,9 @@ describe('JobManager integration', () => {
           // Due two hours ago; nothing advances this column while paused.
           nextRun: now - 2 * 60 * 60_000,
           createdAt: now - 48 * 60 * 60_000,
-          // Resumed an hour ago — after the fire it was paused through.
+          // Resumed an hour ago — after the fire it was paused through. A
+          // pause is one of the three ways the report loses a fire, so the
+          // later write must not disqualify it from being made up.
           updatedAt: now - 60 * 60_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 1 },
           metadata: {}
@@ -809,8 +825,7 @@ describe('JobManager integration', () => {
       const { scheduler, jobManager } = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
       await drainAllQueues(jobManager)
 
-      // Making this up would run the agent for a fire the pause suppressed.
-      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
 
       await teardownManager(scheduler, jobManager)
     })
@@ -829,10 +844,8 @@ describe('JobManager integration', () => {
           jobInputTemplate: { message: 'missed-daily-cron' },
           enabled: true,
           lastRun: now - 25 * 60 * 60_000,
-          // Yesterday's fire came and went while the app was closed.
+          // Yesterday's 09:00 came and went while the app was closed.
           nextRun: now - 60 * 60_000,
-          createdAt: now - 48 * 60 * 60_000,
-          updatedAt: now - 25 * 60 * 60_000,
           catchUpPolicy: { kind: 'after-startup', minutes: 1 },
           metadata: {}
         })
@@ -857,6 +870,156 @@ describe('JobManager integration', () => {
       expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
 
       await teardownManager(boot2.scheduler, boot2.jobManager)
+    })
+  })
+
+  describe('catch-up after the machine wakes', () => {
+    const catchUpNoopHandler: JobHandler = {
+      recovery: 'abandon',
+      defaultConcurrency: 1,
+      async execute() {
+        return {}
+      }
+    }
+
+    /** The armed SchedulerService entry backing an interval schedule. */
+    function intervalEntry(scheduler: SchedulerService, scheduleId: string): unknown {
+      const handles = (scheduler as unknown as { intervalHandles: Map<string, unknown> }).intervalHandles
+      return handles.get(`schedule:${scheduleId}`)
+    }
+
+    /**
+     * Put a running schedule into the state a suspend leaves behind: its fire
+     * time has passed and no timer ran. Sleeping cannot be simulated by moving
+     * the clock (Date.now is real here), so the anchor moves back instead —
+     * the sweep reads exactly the same row either way.
+     */
+    async function sleepThroughFire(
+      dbh: DbType,
+      id: string,
+      anchor: { lastRun?: number; nextRun?: number }
+    ): Promise<void> {
+      await dbh.update(jobScheduleTable).set(anchor).where(eq(jobScheduleTable.id, id))
+    }
+
+    it('makes up an interval fire slept through, exactly once per miss', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.interval',
+          trigger: { kind: 'interval', ms: 60 * 60_000 },
+          jobInputTemplate: { message: 'slept-through' },
+          enabled: true,
+          // Fired a minute ago: nothing owed yet, so startup recovery arms it
+          // and leaves it alone.
+          lastRun: now - 60_000,
+          nextRun: null,
+          createdAt: now - 24 * 60 * 60_000,
+          updatedAt: now - 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({
+        handlers: [['task.interval', catchUpNoopHandler]]
+      })
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+      const armedBeforeSleep = intervalEntry(scheduler, row.id)
+
+      // Machine slept through the hourly fire. The chained setTimeout counts
+      // only awake time, so it did not run — and would not until a full hour
+      // after the wake, restarting the cadence from the wake-up moment.
+      await sleepThroughFire(dbh, row.id, { lastRun: now - 3 * 60 * 60_000 })
+      wakeFromSleep()
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+      // The stale timer is replaced, not left running alongside the make-up.
+      expect(intervalEntry(scheduler, row.id)).not.toBe(armedBeforeSleep)
+
+      // A second wake with nothing owed adds nothing: the make-up advanced
+      // lastRun, which is the anchor overdue detection reads.
+      wakeFromSleep()
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+
+      await teardownManager(scheduler, jobManager)
+    })
+
+    it('makes up a cron fire slept through and projects its next run', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const farHour = (new Date(now).getHours() + 12) % 24
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.cron',
+          trigger: { kind: 'cron', expr: `0 ${farHour} * * *` },
+          jobInputTemplate: { message: 'slept-through-cron' },
+          enabled: true,
+          lastRun: now - 60_000,
+          nextRun: now + 12 * 60 * 60_000,
+          createdAt: now - 48 * 60 * 60_000,
+          updatedAt: now - 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({ handlers: [['task.cron', catchUpNoopHandler]] })
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+
+      // Slept past the daily occurrence. Croner polls at most 30 s apart and
+      // compares the wall clock, so its timer would run this same fire late on
+      // wake — hence the sweep replaces the timer instead of racing it.
+      await sleepThroughFire(dbh, row.id, { nextRun: now - 2 * 60 * 60_000 })
+      wakeFromSleep()
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(1)
+      const afterSweep = jobScheduleService.getById(row.id)
+      expect(Date.parse(afterSweep!.nextRun!)).toBeGreaterThan(now)
+
+      await teardownManager(scheduler, jobManager)
+    })
+
+    it('leaves the cadence of a schedule that owes nothing untouched', async () => {
+      const dbh = MockMainDbServiceExport.dbService.getDb() as DbType
+      const now = Date.now()
+      const [row] = await dbh
+        .insert(jobScheduleTable)
+        .values({
+          type: 'task.interval',
+          trigger: { kind: 'interval', ms: 60 * 60_000 },
+          jobInputTemplate: { message: 'short-nap' },
+          enabled: true,
+          lastRun: now - 60_000,
+          nextRun: null,
+          createdAt: now - 24 * 60 * 60_000,
+          updatedAt: now - 60_000,
+          catchUpPolicy: { kind: 'after-startup', minutes: 1 },
+          metadata: {}
+        })
+        .returning()
+
+      const { scheduler, jobManager } = await bootstrapManager({
+        handlers: [['task.interval', catchUpNoopHandler]]
+      })
+      const armed = intervalEntry(scheduler, row.id)
+
+      // A nap shorter than the interval: re-arming here would push the hourly
+      // fire a full hour past every wake, so a laptop lid could starve it.
+      wakeFromSleep()
+      await drainAllQueues(jobManager)
+
+      expect(jobService.list({ scheduleId: row.id })).toHaveLength(0)
+      expect(intervalEntry(scheduler, row.id)).toBe(armed)
+
+      await teardownManager(scheduler, jobManager)
     })
   })
 

@@ -77,7 +77,8 @@ const stubbornGate = deferred()
 // releases it in the finally. Shared spies let the end-to-end test assert acquire/release.
 const sleepHoldDispose = vi.fn()
 const mockPowerService = {
-  preventSleep: vi.fn(() => ({ dispose: sleepHoldDispose }))
+  preventSleep: vi.fn(() => ({ dispose: sleepHoldDispose })),
+  onResume: vi.fn(() => ({ dispose: vi.fn() }))
 }
 
 function makeEchoHandler(): JobHandler<EchoInput> {

@@ -248,6 +248,8 @@ export class JobManager extends BaseService {
    * flow (the parked flow resumes on its own).
    */
   private recoveryFlowInFlight = false
+  /** Re-entry guard for `sweepOverdueOnResume` — suspend/resume can double-fire. */
+  private resumeSweepInFlight = false
 
   /**
    * True while at least one `pause()` hold is live (write quiesce). Distinct
@@ -332,6 +334,32 @@ export class JobManager extends BaseService {
       this._recoveryDone = this.runStartupRecoveryFlow()
     }, JOB_MANAGER_STARTUP_DELAY_MS)
     this.registerDisposable(() => clearTimeout(handle))
+    this.registerDisposable(application.get('PowerService').onResume(() => void this.sweepOverdueOnResume()))
+  }
+
+  /**
+   * Catch up the fires that went missing while the machine slept. Timers do
+   * not run through a suspend: an interval's chained `setTimeout` counts only
+   * awake time, so its fire slides by the whole sleep ("restarts the clock
+   * from when you wake up", as the report puts it), and a cron's croner timer
+   * fires late once on wake. `retime` makes each make-up replace the schedule's
+   * timer, so exactly one run happens either way.
+   *
+   * Skipped while a pause hold is live and while startup recovery has not
+   * started — that flow sweeps the same schedules itself. Re-entry is dropped
+   * rather than queued: a second sweep over the same rows finds nothing owed.
+   */
+  private async sweepOverdueOnResume(): Promise<void> {
+    if (this._isShuttingDown || this.isAutonomySuspended || !this._recoveryDone || this.resumeSweepInFlight) return
+    this.resumeSweepInFlight = true
+    try {
+      await this._recoveryDone
+      await this.detectAndDispatchOverdue(jobScheduleService.listEnabled(), 0, true)
+    } catch (err) {
+      logger.error('Catch-up sweep after system resume failed', err as Error)
+    } finally {
+      this.resumeSweepInFlight = false
+    }
   }
 
   /**
@@ -1312,12 +1340,16 @@ export class JobManager extends BaseService {
         })
       }
     } else {
-      const disp = this.scheduleDisposables.get(id)
-      if (disp) {
-        disp.dispose()
-        this.scheduleDisposables.delete(id)
-      }
+      this.disposeScheduleTimer(id)
     }
+  }
+
+  /** Drop a schedule's SchedulerService registration if it has one. Idempotent. */
+  private disposeScheduleTimer(id: string): void {
+    const disp = this.scheduleDisposables.get(id)
+    if (!disp) return
+    disp.dispose()
+    this.scheduleDisposables.delete(id)
   }
 
   /**
@@ -1346,26 +1378,32 @@ export class JobManager extends BaseService {
    * @returns `true` if the row existed and was updated; `false` if not found
    */
   async pauseJobScheduleById(id: string): Promise<boolean> {
-    const disp = this.scheduleDisposables.get(id)
-    if (disp) {
-      disp.dispose()
-      this.scheduleDisposables.delete(id)
-    }
+    this.disposeScheduleTimer(id)
     return jobScheduleService.setEnabled(id, false)
   }
 
   /**
-   * Resume a paused schedule by id. Sets `enabled=true` in the DB and re-arms
-   * the SchedulerService timer using the persisted trigger config.
+   * Resume a paused schedule by id. Sets `enabled=true` in the DB, makes up a
+   * fire the pause swallowed, and re-arms the SchedulerService timer using the
+   * persisted trigger config.
+   *
+   * A pause is one of the three ways a scheduled fire goes missing (the others
+   * being a closed app and a sleeping machine), so the make-up happens here
+   * rather than waiting for the next process start. `markFired` inside the
+   * catch-up settles that debt, which is what keeps the following restart from
+   * making up the same fire again. `retime` is not needed: the schedule is
+   * still paused at this point, so it has no timer that could fire underneath.
    *
    * @param id - Schedule row id
    * @returns `true` if the row existed and was updated; `false` if not found
    */
-  resumeJobScheduleById(id: string): boolean {
+  async resumeJobScheduleById(id: string): Promise<boolean> {
     const updated = jobScheduleService.setEnabled(id, true)
-    if (updated) {
-      const snapshot = jobScheduleService.getById(id)
-      if (snapshot) this.armSchedule(snapshot)
+    if (!updated) return false
+    const snapshot = jobScheduleService.getById(id)
+    if (snapshot) {
+      await this.detectAndDispatchOverdue([snapshot])
+      this.syncJobScheduleTimerById(id)
     }
     return updated
   }
@@ -2216,7 +2254,7 @@ export class JobManager extends BaseService {
   }
 
   /**
-   * Walk every enabled schedule on startup, decide via `computeCatchUpAction`
+   * Walk the given schedules, decide via `computeCatchUpAction`
    * whether each missed its expected fire window, and:
    *   - emit `onMissed` to the handler if defined (observability), AND
    *   - enqueue a make-up job if the schedule's `catchUpPolicy` requested it
@@ -2232,8 +2270,17 @@ export class JobManager extends BaseService {
    * (possibly unbounded) `await onMissed` still finishes its enqueue. Returns
    * the first index whose step did NOT start — `schedules.length` when the
    * sweep completed — so a pause-interrupted flow can resume exactly there.
+   *
+   * @param retime - Re-time each schedule this sweep makes up: drop its timer
+   *   before the make-up, re-arm it from the consumed anchor after. Only a
+   *   sweep over ALREADY-ARMED schedules needs it (see `sweepOverdueOnResume`)
+   *   — startup recovery arms nothing until its later `arm` step.
    */
-  private async detectAndDispatchOverdue(schedules: JobScheduleSnapshot[], startIndex = 0): Promise<number> {
+  private async detectAndDispatchOverdue(
+    schedules: JobScheduleSnapshot[],
+    startIndex = 0,
+    retime = false
+  ): Promise<number> {
     const nowMs = Date.now()
     const scheduler = application.get('SchedulerService')
     const projectNextRun: CronProjector = (trigger, fromMs) =>
@@ -2249,6 +2296,11 @@ export class JobManager extends BaseService {
       const handler = this.handlers.get(schedule.type)
       if (!handler) continue
       const action = computeCatchUpAction(schedule, handler, nowMs, projectNextRun)
+      // Drop the armed timer BEFORE the awaited onMissed below: croner polls
+      // at most 30 s apart and compares the wall clock against the fire time
+      // it was scheduled for, so a timer that slept through that fire runs it
+      // late on wake — doubling the make-up this loop is about to enqueue.
+      if (retime && action.shouldEnqueue) this.disposeScheduleTimer(schedule.id)
       if (action.missEvent && handler.onMissed) {
         try {
           await handler.onMissed(action.missEvent)
@@ -2273,6 +2325,11 @@ export class JobManager extends BaseService {
         // stay overdue (and read as "no next run") for a whole cron period.
         const nextRun = scheduler.nextRunFor(schedule.trigger)
         jobScheduleService.markFired(schedule.id, nowMs, nextRun?.getTime() ?? null)
+        // Re-arm from the anchor the make-up just advanced. Only the schedules
+        // made up here are re-armed: an interval's cadence restarts on arm, so
+        // re-arming an untouched one would push its next fire further out on
+        // every wake — an hourly task could never reach it on a laptop.
+        if (retime) this.syncJobScheduleTimerById(schedule.id)
         logger.info('Catch-up enqueued', { scheduleId: schedule.id, type: schedule.type, scheduledAt })
       }
     }
