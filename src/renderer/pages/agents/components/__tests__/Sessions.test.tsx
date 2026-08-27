@@ -1162,6 +1162,45 @@ describe('Sessions', () => {
     expect(screen.getByText('Session 56')).toBeInTheDocument()
   })
 
+  it('regroups tasks by the real day when the app stays open past midnight', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 0, 10, 22, 0, 0))
+    preferenceMocks.values.set('agent.session.display_mode', 'time')
+    const lateNightIso = new Date(2026, 0, 10, 21, 0, 0).toISOString()
+    setupSessions({
+      sessions: [createSession({ id: 'session-late', name: 'Late night task', orderKey: 'a', updatedAt: lateNightIso })]
+    })
+
+    const view = render(<SessionsForTest />)
+
+    // Midnight passes with the window still open, then a task is created on the new day.
+    act(() => {
+      vi.advanceTimersByTime(3 * 60 * 60 * 1000)
+    })
+    setupSessions({
+      sessions: [
+        createSession({
+          id: 'session-fresh',
+          name: 'Fresh task',
+          orderKey: 'a',
+          updatedAt: new Date(2026, 0, 11, 0, 30, 0).toISOString()
+        }),
+        createSession({ id: 'session-late', name: 'Late night task', orderKey: 'b', updatedAt: lateNightIso })
+      ]
+    })
+    view.rerender(<SessionsForTest />)
+
+    // Rows render flat under their group header, so document order is what proves membership: with the
+    // grouping `now` frozen at mount the two rows swap groups, which is what users reported.
+    const timeGroupsAndRows = Array.from(
+      document.querySelectorAll('button[aria-expanded], [data-ui="chat.item-title"]')
+    )
+      .map((element) => element.textContent?.trim())
+      .filter(Boolean)
+
+    expect(timeGroupsAndRows).toEqual(['Today', 'Fresh task', 'Earlier', 'Late night task'])
+  })
+
   it('creates a first-agent session from the header when there are agents but no sessions', async () => {
     const onCreateSession = vi.fn()
     const onShowMissingAgentSelection = vi.fn()

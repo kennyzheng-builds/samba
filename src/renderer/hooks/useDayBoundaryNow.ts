@@ -51,7 +51,9 @@ export const useDayBoundaryNow = (): Date => {
       if (document.visibilityState === 'visible') resync()
     }
 
-    scheduleNextDay()
+    // The day can already have rolled over by the time effects run — a tree rendered inside a hidden
+    // <Activity> only mounts them when it is shown, so mounting has to correct, not just schedule.
+    resync()
     window.addEventListener('focus', resync)
     document.addEventListener('visibilitychange', handleVisibilityChange)
 

@@ -1,5 +1,6 @@
 import { getResourceTimeBucket } from '@renderer/utils/chat/resourceListBase'
-import { act, renderHook } from '@testing-library/react'
+import { act, render, renderHook } from '@testing-library/react'
+import { createElement, Fragment } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useDayBoundaryNow } from '../useDayBoundaryNow'
@@ -34,6 +35,26 @@ describe('useDayBoundaryNow', () => {
 
     expect(getResourceTimeBucket(createdToday, result.current)).toBe('today')
     expect(getResourceTimeBucket(createdTwoDaysAgo, result.current)).toBe('earlier')
+  })
+
+  it('corrects a now that was captured before midnight when effects only run afterwards', () => {
+    let latest: Date | undefined
+    const Probe = () => {
+      latest = useDayBoundaryNow()
+      return null
+    }
+    // Renders after Probe, so the clock jump lands between Probe's render and its effect — the gap a
+    // tree rendered inside a hidden <Activity> stretches to hours.
+    const RollOverDay = () => {
+      vi.setSystemTime(new Date(2026, 0, 11, 0, 30, 0))
+      return null
+    }
+
+    vi.setSystemTime(new Date(2026, 0, 10, 23, 59, 59))
+    render(createElement(Fragment, null, createElement(Probe), createElement(RollOverDay)))
+
+    expect(latest).toBeDefined()
+    expect(getResourceTimeBucket(new Date(), latest as Date)).toBe('today')
   })
 
   it('keeps the same reference while the local day does not change', () => {
